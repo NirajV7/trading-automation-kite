@@ -56,7 +56,8 @@ def get_kite_orders():
                 "status": o.get("status"),
                 "price": o.get("price"),
                 "trigger_price": o.get("trigger_price"),
-                "status_message": o.get("status_message") or ""
+                "status_message": o.get("status_message") or "",
+                "variety": o.get("variety") or "regular"
             })
         return formatted_orders
     except Exception as e:

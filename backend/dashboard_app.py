@@ -490,6 +490,74 @@ def api_orders():
     """
     return JSONResponse({"orders": get_kite_orders()})
 
+
+@app.post("/api/kite/orders/cancel")
+async def cancel_order(request: Request):
+    """
+    Cancels a pending order on Zerodha Kite.
+    """
+    try:
+        data = await request.json()
+        order_id = data.get("order_id")
+        variety = data.get("variety", "regular")
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Invalid request payload"}, status_code=400)
+        
+    if not order_id:
+        return JSONResponse({"status": "error", "message": "order_id is required"}, status_code=400)
+        
+    try:
+        from kite_auth_manager import get_kite_client
+        kite = get_kite_client()
+        res = kite.cancel_order(variety=variety, order_id=order_id)
+        return JSONResponse({"status": "success", "message": f"Order {order_id} cancelled successfully", "order_id": res})
+    except Exception as e:
+        print(f"[API ERROR] Failed to cancel order {order_id}: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/api/kite/orders/modify")
+async def modify_order(request: Request):
+    """
+    Modifies a pending order on Zerodha Kite.
+    """
+    try:
+        data = await request.json()
+        order_id = data.get("order_id")
+        variety = data.get("variety", "regular")
+        quantity = int(data.get("quantity"))
+        price = float(data.get("price"))
+        trigger_price = float(data.get("trigger_price", 0.0))
+        order_type = data.get("order_type")
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Invalid request payload or value types"}, status_code=400)
+        
+    if not order_id or not order_type:
+        return JSONResponse({"status": "error", "message": "order_id and order_type are required"}, status_code=400)
+        
+    try:
+        from kite_auth_manager import get_kite_client
+        kite = get_kite_client()
+        
+        # Prepare modification parameters
+        params = {
+            "variety": variety,
+            "order_id": order_id,
+            "quantity": quantity,
+            "order_type": order_type
+        }
+        # Only pass price / trigger_price if relevant for the order type
+        if order_type in ["LIMIT", "SL"]:
+            params["price"] = price
+        if order_type in ["SL", "SL-M"]:
+            params["trigger_price"] = trigger_price
+            
+        res = kite.modify_order(**params)
+        return JSONResponse({"status": "success", "message": f"Order {order_id} modified successfully", "order_id": res})
+    except Exception as e:
+        print(f"[API ERROR] Failed to modify order {order_id}: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 @app.get("/api/kite/positions")
 def api_positions():
     """

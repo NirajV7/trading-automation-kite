@@ -442,3 +442,71 @@ body {
 .log-box::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Orderbook Sub-tabs */
+.orderbook-subtabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.orderbook-subtabs .pill-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  color: var(--color-text-muted);
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.orderbook-subtabs .pill-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-primary);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.orderbook-subtabs .pill-btn.active {
+  background: rgba(0, 229, 255, 0.12);
+  border-color: var(--color-cyan);
+  color: var(--color-cyan);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.1);
+}
+
+.btn-action-modify {
+  background: rgba(227, 179, 65, 0.1);
+  border: 1px solid rgba(227, 179, 65, 0.3);
+  color: var(--color-gold);
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  margin-right: 6px;
+  transition: all 0.2s ease;
+}
+
+.btn-action-modify:hover {
+  background: rgba(227, 179, 65, 0.2);
+  border-color: var(--color-gold);
+}
+
+.btn-action-cancel {
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  color: var(--color-crimson);
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.btn-action-cancel:hover {
+  background: rgba(248, 81, 73, 0.2);
+  border-color: var(--color-crimson);
+}

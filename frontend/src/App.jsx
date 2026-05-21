@@ -246,6 +246,82 @@ export default function App() {
     }
   };
 
+  const cancelOrder = async (orderId, variety = "regular") => {
+    if (!confirm(`Cancel order ${orderId}?`)) return;
+    try {
+      const res = await fetch(`${API_URL}/api/kite/orders/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: orderId, variety })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        alert("Order cancelled successfully");
+      } else {
+        alert(`Error: ${data.message}`);
+      }
+      fetchOrders();
+    } catch (e) {
+      alert("Failed to cancel order.");
+    }
+  };
+
+  const modifyOrderParams = async (orderId, variety, orderType, currentQty, currentPrice, currentTriggerPrice) => {
+    const newQtyStr = prompt(`Enter new quantity for order ${orderId}:`, currentQty);
+    if (newQtyStr === null) return;
+    const qty = parseInt(newQtyStr);
+    if (isNaN(qty) || qty <= 0) {
+      alert("Invalid quantity");
+      return;
+    }
+
+    let price = 0.0;
+    if (orderType === "LIMIT" || orderType === "SL") {
+      const newPriceStr = prompt(`Enter new limit price for order ${orderId}:`, currentPrice);
+      if (newPriceStr === null) return;
+      price = parseFloat(newPriceStr);
+      if (isNaN(price) || price < 0) {
+        alert("Invalid price");
+        return;
+      }
+    }
+
+    let triggerPrice = 0.0;
+    if (orderType === "SL" || orderType === "SL-M") {
+      const newTriggerStr = prompt(`Enter new trigger price for order ${orderId}:`, currentTriggerPrice);
+      if (newTriggerStr === null) return;
+      triggerPrice = parseFloat(newTriggerStr);
+      if (isNaN(triggerPrice) || triggerPrice < 0) {
+        alert("Invalid trigger price");
+        return;
+      }
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/kite/orders/modify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_id: orderId,
+          variety,
+          quantity: qty,
+          price,
+          trigger_price: triggerPrice,
+          order_type: orderType
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        alert("Order modified successfully");
+      } else {
+        alert(`Error: ${data.message}`);
+      }
+      fetchOrders();
+    } catch (e) {
+      alert("Failed to modify order.");
+    }
+  };
+
   const addToWatchlist = async (symbol, direction) => {
     try {
       await fetch(`${API_URL}/api/watchlist/add`, {
@@ -430,6 +506,8 @@ export default function App() {
             <OrderBook 
               orders={orders} 
               onSelectSymbol={selectChartSymbol} 
+              onCancelOrder={cancelOrder}
+              onModifyOrder={modifyOrderParams}
             />
           </main>
         )}

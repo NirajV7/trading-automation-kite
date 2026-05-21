@@ -1,6 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 
-export default function OrderBook({ orders, onSelectSymbol }) {
+export default function OrderBook({ orders, onSelectSymbol, onCancelOrder, onModifyOrder }) {
+  const [activeSubTab, setActiveSubTab] = useState('pending'); // 'pending' or 'executed'
+
+  // Define status lists
+  const pendingStatuses = ['OPEN', 'TRIGGER PENDING', 'VALIDATION PENDING', 'PUT ORDER REQ RECEIVED'];
+  
+  const pendingOrders = orders.filter(o => pendingStatuses.includes(o.status.toUpperCase()));
+  const executedOrders = orders.filter(o => !pendingStatuses.includes(o.status.toUpperCase()));
+
   const getStatusBadgeClass = (status) => {
     const s = status.toUpperCase();
     if (s === 'COMPLETE') return 'trend-bull';
@@ -9,10 +17,120 @@ export default function OrderBook({ orders, onSelectSymbol }) {
     return '';
   };
 
+  const renderOrderRow = (o, isPending) => {
+    const isBuy = o.transaction_type === 'BUY';
+    const statusClass = getStatusBadgeClass(o.status);
+
+    return (
+      <tr key={o.order_id}>
+        {/* Order ID */}
+        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
+          {o.order_id}
+        </td>
+        
+        {/* Symbol */}
+        <td 
+          style={{ fontWeight: 700, color: 'var(--color-cyan)', cursor: 'pointer' }} 
+          onClick={() => onSelectSymbol(o.symbol)}
+          title="Click to view chart"
+        >
+          {o.symbol}
+        </td>
+        
+        {/* Type */}
+        <td 
+          className={isBuy ? 'text-up' : 'text-down'}
+          style={{ fontWeight: 700 }}
+        >
+          {o.transaction_type}
+        </td>
+        
+        {/* Order Type */}
+        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+          {o.order_type}
+        </td>
+        
+        {/* Qty */}
+        <td style={{ fontFamily: 'var(--font-mono)' }}>
+          {o.quantity}
+        </td>
+        
+        {/* Price */}
+        <td style={{ fontFamily: 'var(--font-mono)' }}>
+          {o.price > 0 ? `₹${o.price.toFixed(2)}` : '-'}
+        </td>
+        
+        {/* Trigger Price (Pending only) */}
+        {isPending && (
+          <td style={{ fontFamily: 'var(--font-mono)' }}>
+            {o.trigger_price > 0 ? `₹${o.trigger_price.toFixed(2)}` : '-'}
+          </td>
+        )}
+        
+        {/* Status */}
+        <td>
+          <span className={`trend-badge ${statusClass}`} style={{ fontSize: '0.65rem' }}>
+            {o.status}
+          </span>
+        </td>
+        
+        {/* Actions or Message */}
+        {isPending ? (
+          <td>
+            <button 
+              className="btn-action-modify"
+              onClick={() => onModifyOrder(
+                o.order_id, 
+                o.variety || 'regular', 
+                o.order_type, 
+                o.quantity, 
+                o.price, 
+                o.trigger_price
+              )}
+            >
+              ✏️ Modify
+            </button>
+            <button 
+              className="btn-action-cancel"
+              onClick={() => onCancelOrder(o.order_id, o.variety || 'regular')}
+            >
+              ❌ Cancel
+            </button>
+          </td>
+        ) : (
+          <td 
+            style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} 
+            title={o.status_message}
+          >
+            {o.status_message}
+          </td>
+        )}
+      </tr>
+    );
+  };
+
+  const activeOrdersList = activeSubTab === 'pending' ? pendingOrders : executedOrders;
+
   return (
     <div className="glass-panel" style={{ marginTop: '20px' }}>
-      <div className="panel-header">
-        <span>Zerodha Orderbook (Recent Actions)</span>
+      <div className="panel-header" style={{ marginBottom: '10px' }}>
+        <span>Zerodha Orderbook</span>
+        
+        {/* Sub-tabs selector */}
+        <div className="orderbook-subtabs">
+          <button 
+            className={`pill-btn ${activeSubTab === 'pending' ? 'active' : ''}`}
+            onClick={() => setActiveSubTab('pending')}
+          >
+            Pending ({pendingOrders.length})
+          </button>
+          <button 
+            className={`pill-btn ${activeSubTab === 'executed' ? 'active' : ''}`}
+            onClick={() => setActiveSubTab('executed')}
+          >
+            Executed ({executedOrders.length})
+          </button>
+        </div>
       </div>
       
       <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
@@ -25,81 +143,23 @@ export default function OrderBook({ orders, onSelectSymbol }) {
               <th>Order Type</th>
               <th>Qty</th>
               <th>Price</th>
-              <th>Trigger Price</th>
+              {activeSubTab === 'pending' && <th>Trigger Price</th>}
               <th>Status</th>
-              <th>Message</th>
+              <th>{activeSubTab === 'pending' ? 'Actions' : 'Message'}</th>
             </tr>
           </thead>
           <tbody>
-            {orders.length === 0 ? (
+            {activeOrdersList.length === 0 ? (
               <tr>
-                <td colSpan="9" style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '20px' }}>
-                  No orders found.
+                <td 
+                  colSpan={activeSubTab === 'pending' ? 9 : 8} 
+                  style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '20px' }}
+                >
+                  No {activeSubTab} orders found.
                 </td>
               </tr>
             ) : (
-              orders.map((o) => {
-                const isBuy = o.transaction_type === 'BUY';
-                const statusClass = getStatusBadgeClass(o.status);
-
-                return (
-                  <tr key={o.order_id}>
-                    {/* Order ID */}
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
-                      {o.order_id}
-                    </td>
-                    
-                    {/* Symbol */}
-                    <td 
-                      style={{ fontWeight: 700, color: 'var(--color-cyan)', cursor: 'pointer' }} 
-                      onClick={() => onSelectSymbol(o.symbol)}
-                      title="Click to view chart"
-                    >
-                      {o.symbol}
-                    </td>
-                    
-                    {/* Type */}
-                    <td 
-                      className={isBuy ? 'text-up' : 'text-down'}
-                      style={{ fontWeight: 700 }}
-                    >
-                      {o.transaction_type}
-                    </td>
-                    
-                    {/* Order Type */}
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
-                      {o.order_type}
-                    </td>
-                    
-                    {/* Qty */}
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>
-                      {o.quantity}
-                    </td>
-                    
-                    {/* Price */}
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>
-                      {o.price > 0 ? `₹${o.price.toFixed(2)}` : '-'}
-                    </td>
-                    
-                    {/* Trigger Price */}
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>
-                      {o.trigger_price > 0 ? `₹${o.trigger_price.toFixed(2)}` : '-'}
-                    </td>
-                    
-                    {/* Status */}
-                    <td>
-                      <span className={`trend-badge ${statusClass}`} style={{ fontSize: '0.65rem' }}>
-                        {o.status}
-                      </span>
-                    </td>
-                    
-                    {/* Status Message */}
-                    <td style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.status_message}>
-                      {o.status_message}
-                    </td>
-                  </tr>
-                );
-              })
+              activeOrdersList.map((o) => renderOrderRow(o, activeSubTab === 'pending'))
             )}
           </tbody>
         </table>
