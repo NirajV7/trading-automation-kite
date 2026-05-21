@@ -5,6 +5,7 @@ import WatchlistScanners from './components/WatchlistScanners';
 import TechnicalChart from './components/TechnicalChart';
 import PositionsTracker from './components/PositionsTracker';
 import TelemetryLog from './components/TelemetryLog';
+import OrderBook from './components/OrderBook';
 
 const API_URL = "http://127.0.0.1:8080";
 
@@ -34,6 +35,7 @@ export default function App() {
   const [engineMode, setEngineMode] = useState("dry"); // "dry" or "live"
   const [watchlistData, setWatchlistData] = useState([]);
   const [positions, setPositions] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [logOutput, setLogOutput] = useState("Connecting to FastAPI daemon...");
   const [selectedSymbol, setSelectedSymbol] = useState("RELIANCE");
   const [chartInterval, setChartInterval] = useState("5minute");
@@ -80,6 +82,17 @@ export default function App() {
     }
   };
 
+  // Fetch orders
+  const fetchOrders = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/kite/orders`);
+      const data = await res.json();
+      setOrders(data.orders || []);
+    } catch (e) {
+      console.debug("Failed fetching orders", e);
+    }
+  };
+
   // Fetch logs
   const fetchLogs = async () => {
     try {
@@ -96,17 +109,20 @@ export default function App() {
     fetchStatus();
     fetchWatchlistData();
     fetchPositions();
+    fetchOrders();
     fetchLogs();
 
     const intervalStatus = setInterval(fetchStatus, 5000);
     const intervalWatchlist = setInterval(fetchWatchlistData, 2000);
     const intervalPositions = setInterval(fetchPositions, 1500);
+    const intervalOrders = setInterval(fetchOrders, 2000);
     const intervalLogs = setInterval(fetchLogs, 3000);
 
     return () => {
       clearInterval(intervalStatus);
       clearInterval(intervalWatchlist);
       clearInterval(intervalPositions);
+      clearInterval(intervalOrders);
       clearInterval(intervalLogs);
     };
   }, []);
@@ -410,6 +426,10 @@ export default function App() {
               onModifyStopLoss={modifyStopLoss}
               onScaleOut={scaleOutPosition}
               onExit={exitPosition}
+            />
+            <OrderBook 
+              orders={orders} 
+              onSelectSymbol={selectChartSymbol} 
             />
           </main>
         )}
