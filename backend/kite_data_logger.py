@@ -15,18 +15,12 @@ from config import (
     KITE_TOKEN_FILE,
     NIFTY_50_TICKERS,
     TICKER_LOG,
-    ENGINE_LOG
+    ENGINE_LOG,
+    INSTRUMENT_MAPPING_FILE,
+    LIVE_MARKET_DATA_FILE
 )
 from kite_auth_manager import get_kite_client
 from kite_utils import round_to_tick, handle_auth_failure
-
-# File to store mapping of symbol -> instrument token
-INSTRUMENT_MAPPING_FILE = os.path.join(
-    os.path.dirname(KITE_TOKEN_FILE), "instrument_mappings.json"
-)
-LIVE_MARKET_DATA_FILE = os.path.join(
-    os.path.dirname(KITE_TOKEN_FILE), "live_market_data.json"
-)
 
 class TechnicalIndicators:
     """Calculates all math/technical indicators for candles."""
