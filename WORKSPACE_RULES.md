@@ -23,3 +23,9 @@ This document outlines the strict engineering rules and guardrails for this code
 
 ## 3. Git Protocol
 *   **Local Commits Only**: Stage and commit changes locally to track progress. Do NOT push to the remote repository (`origin`) unless explicitly instructed.
+
+---
+
+## 4. Kite API Verification
+*   **Repo Validation**: Always verify anything written in Kite API or contacting Kite against the cloned `pykiteconnect` repository to ensure parameters, methods, and return values align exactly with the library implementation.
+
