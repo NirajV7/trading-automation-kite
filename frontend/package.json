@@ -1,0 +1,22 @@
+{
+  "name": "kite-quant-terminal",
+  "version": "1.0.0",
+  "description": "High-performance Cyberpunk Desktop Trading Terminal for Zerodha Kite",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "keywords": [
+    "trading",
+    "quant",
+    "zerodha",
+    "kite",
+    "electron"
+  ],
+  "author": "NJ",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^28.2.0"
+  }
+}
