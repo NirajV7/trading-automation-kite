@@ -15,7 +15,8 @@ from config import (
     TRADE_JOURNAL_CSV,
     ENGINE_LOG,
     INSTRUMENT_MAPPING_FILE,
-    LIVE_MARKET_DATA_FILE
+    LIVE_MARKET_DATA_FILE,
+    REQUIRE_MANUAL_APPROVAL
 )
 from kite_auth_manager import get_kite_client
 from kite_utils import round_to_tick, handle_auth_failure
@@ -453,10 +454,16 @@ class KiteExecutionCore:
                 qty = self.calculate_position_size(symbol, current_price, sl_price)
                 if qty > 0:
                     self.log_message(f"ORB BUY signal triggered for {symbol} at {current_price}")
-                    if self.dry_run:
-                        self.trigger_mock_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
+                    if REQUIRE_MANUAL_APPROVAL:
+                        from telegram_bot import send_signal_approval_request
+                        send_signal_approval_request(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB", dry_run=self.dry_run)
+                        # Set a 5-minute cooldown to prevent spamming duplicate alerts
+                        self.cooldowns[symbol] = time.time() + 300.0
                     else:
-                        self.execute_live_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
+                        if self.dry_run:
+                            self.trigger_mock_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
+                        else:
+                            self.execute_live_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
                         
             # Short trigger: price breaks low boundary
             elif current_price < low_boundary:
@@ -469,10 +476,16 @@ class KiteExecutionCore:
                 qty = self.calculate_position_size(symbol, current_price, sl_price)
                 if qty > 0:
                     self.log_message(f"ORB SELL signal triggered for {symbol} at {current_price}")
-                    if self.dry_run:
-                        self.trigger_mock_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")
+                    if REQUIRE_MANUAL_APPROVAL:
+                        from telegram_bot import send_signal_approval_request
+                        send_signal_approval_request(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB", dry_run=self.dry_run)
+                        # Set a 5-minute cooldown to prevent spamming duplicate alerts
+                        self.cooldowns[symbol] = time.time() + 300.0
                     else:
-                        self.execute_live_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")
+                        if self.dry_run:
+                            self.trigger_mock_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")
+                        else:
+                            self.execute_live_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")
 
     def audit_active_positions_with_broker(self):
         """
@@ -584,7 +597,10 @@ class KiteExecutionCore:
                     self.audit_active_positions_with_broker()
                     last_audit = now
                     
-                # 2. Read live data cache from logger updates
+                # 2. Reload active trades from disk to synchronize with remote entries (Telegram / Dashboard)
+                self.load_active_trades()
+                
+                # 3. Read live data cache from logger updates
                 if os.path.exists(LIVE_MARKET_DATA_FILE):
                     with open(LIVE_MARKET_DATA_FILE, "r") as f:
                         market_snapshot = json.load(f)

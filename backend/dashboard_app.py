@@ -776,6 +776,19 @@ async def execute_modify_sl(request: Request):
     return JSONResponse(res)
 
 
+@app.on_event("startup")
+def startup_event():
+    """
+    Launches background long-polling listener for interactive Telegram Bot controls.
+    """
+    try:
+        from telegram_bot import start_telegram_polling
+        start_telegram_polling()
+        print("🤖 [Telegram] Background polling thread launched successfully.")
+    except Exception as e:
+        print(f"❌ [Telegram] Failed to start background polling thread: {e}")
+
+
 # -------------------------------------------------------------
 # MAIN APP EXECUTION
 # -------------------------------------------------------------
