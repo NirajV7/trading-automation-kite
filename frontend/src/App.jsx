@@ -19,6 +19,9 @@ try {
 }
 
 export default function App() {
+  // Navigation State
+  const [activeTab, setActiveTab] = useState('radar'); // 'radar', 'positions', 'system'
+
   // Master app states
   const [status, setStatus] = useState({
     data_logger: "stopped",
@@ -255,10 +258,12 @@ export default function App() {
 
   const selectChartSymbol = (symbol) => {
     setSelectedSymbol(symbol);
+    // Switch to chart tab if user clicked an instrument from another view
+    setActiveTab('radar');
   };
 
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-darkest)' }}>
       {/* 1. Header Toolbar */}
       <header className="app-header">
         <div className="header-title">
@@ -283,6 +288,11 @@ export default function App() {
             </span>
           )}
 
+          {/* Global Emergency Panic Switch */}
+          <button onClick={triggerPanic} className="btn btn-panic" style={{ padding: '6px 16px', fontSize: '0.8rem' }}>
+            ⚠️ PANIC EXIT
+          </button>
+
           {/* System Global Shutdown Controls */}
           <button onClick={stopAll} className="btn btn-crimson">
             🛑 SHUTDOWN ALL
@@ -290,54 +300,137 @@ export default function App() {
         </div>
       </header>
 
-      {/* 2. Main Terminal Layout */}
-      <div className="app-container">
+      {/* 2. Chrome-like tab bar navigation */}
+      <div className="chrome-tabs" style={{ display: 'flex', gap: '4px', background: 'var(--bg-darker)', borderBottom: '1px solid var(--border-color)', padding: '0 20px', height: '40px', alignItems: 'flex-end', WebkitAppRegion: 'no-drag' }}>
+        <button 
+          onClick={() => setActiveTab('radar')}
+          style={{
+            background: activeTab === 'radar' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'radar' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'radar' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'radar' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          📡 Radar & Charts
+        </button>
+        <button 
+          onClick={() => setActiveTab('positions')}
+          style={{
+            background: activeTab === 'positions' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'positions' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'positions' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'positions' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          💼 Risk & Positions
+        </button>
+        <button 
+          onClick={() => setActiveTab('system')}
+          style={{
+            background: activeTab === 'system' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'system' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'system' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'system' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          ⚙️ System Operations
+        </button>
+      </div>
+
+      {/* 3. Main Workspace Area */}
+      <div style={{ flexGrow: 1, overflow: 'hidden', position: 'relative' }}>
         
-        {/* Left Sidebar: Controls & Log stream */}
-        <aside className="sidebar">
-          <EngineControls 
-            status={status}
-            engineMode={engineMode}
-            setEngineMode={setEngineMode}
-            onToggleLogger={toggleLogger}
-            onToggleEngine={toggleEngine}
-            onAddToWatchlist={addToWatchlist}
-            apiUrl={API_URL}
-          />
-          <TelemetryLog logOutput={logOutput} />
-        </aside>
+        {/* Tab 1: Radar & Charts */}
+        {activeTab === 'radar' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
+            <WatchlistScanners 
+              watchlistData={watchlistData} 
+              onSelectSymbol={selectChartSymbol}
+              onRemove={removeFromWatchlist}
+            />
+            <TechnicalChart 
+              selectedSymbol={selectedSymbol}
+              chartInterval={chartInterval}
+              onChangeInterval={setChartInterval}
+              apiUrl={API_URL}
+              watchlistData={watchlistData}
+            />
+          </main>
+        )}
 
-        {/* Right Workspace Area */}
-        <main className="main-workspace">
-          <MetricCards 
-            margin={status.kite_margin} 
-            onPanic={triggerPanic} 
-          />
+        {/* Tab 2: Risk & Positions */}
+        {activeTab === 'positions' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
+            <MetricCards 
+              margin={status.kite_margin} 
+              onPanic={triggerPanic} 
+            />
+            <PositionsTracker 
+              positions={positions}
+              onSelectSymbol={selectChartSymbol}
+              onModifyStopLoss={modifyStopLoss}
+              onScaleOut={scaleOutPosition}
+              onExit={exitPosition}
+            />
+          </main>
+        )}
 
-          <WatchlistScanners 
-            watchlistData={watchlistData} 
-            onSelectSymbol={selectChartSymbol}
-            onRemove={removeFromWatchlist}
-          />
-
-          <TechnicalChart 
-            selectedSymbol={selectedSymbol}
-            chartInterval={chartInterval}
-            onChangeInterval={setChartInterval}
-            apiUrl={API_URL}
-            watchlistData={watchlistData}
-          />
-
-          <PositionsTracker 
-            positions={positions}
-            onSelectSymbol={selectChartSymbol}
-            onModifyStopLoss={modifyStopLoss}
-            onScaleOut={scaleOutPosition}
-            onExit={exitPosition}
-          />
-        </main>
+        {/* Tab 3: System Operations */}
+        {activeTab === 'system' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto', display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px' }}>
+            <EngineControls 
+              status={status}
+              engineMode={engineMode}
+              setEngineMode={setEngineMode}
+              onToggleLogger={toggleLogger}
+              onToggleEngine={toggleEngine}
+              onAddToWatchlist={addToWatchlist}
+              apiUrl={API_URL}
+            />
+            <TelemetryLog logOutput={logOutput} />
+          </main>
+        )}
 
       </div>
-    </>
+    </div>
   );
 }
