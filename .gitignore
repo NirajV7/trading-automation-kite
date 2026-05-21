@@ -106,3 +106,7 @@ venv.bak/
 *.swp
 *.swo
 .DS_Store
+
+# Local configuration secrets
+backend/config.py
+
