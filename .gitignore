@@ -110,3 +110,7 @@ venv.bak/
 # Local configuration secrets
 backend/config.py
 
+# Local reference repositories
+pykiteconnect/
+
+
