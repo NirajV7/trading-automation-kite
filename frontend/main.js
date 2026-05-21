@@ -34,7 +34,16 @@ function createWindow() {
   });
 
   // Load the visual dashboard console
-  mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173').catch(() => {
+      setTimeout(() => {
+        mainWindow.loadURL('http://localhost:5173').catch(err => console.log("Failed to load dev URL:", err));
+      }, 1000);
+    });
+  } else {
+    mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+  }
 
   // Reveal window only when content is ready to prevent white screens
   mainWindow.once('ready-to-show', () => {
