@@ -4,7 +4,7 @@
  * macOS system tray integration (P&L Ticker), and app lifecycle.
  */
 
-const { app, BrowserWindow, Tray, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, shell } = require('electron');
 const path = require('path');
 
 let mainWindow = null;
@@ -31,6 +31,12 @@ function createWindow() {
       contextIsolation: false, // Allows simple Alpine.js integration in renderer
       devTools: true
     }
+  });
+
+  // Redirect target="_blank" to external browser (prevents blank Electron login popup)
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
   });
 
   // Load the visual dashboard console

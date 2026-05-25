@@ -266,6 +266,7 @@ def get_auth_url():
     needs_login, auth_url = check_kite_auth()
     return JSONResponse({"needs_login": needs_login, "auth_url": auth_url})
 
+@app.get("/api/kite/callback")
 @app.get("/kite_auth")
 def kite_auth_callback(request_token: str = None):
     """
