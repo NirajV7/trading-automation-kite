@@ -1,6 +1,36 @@
 import React, { useEffect, useRef } from 'react';
 import { createChart, CrosshairMode } from 'lightweight-charts';
 
+const toLocalTimestamp = (utcSec) => {
+  const d = new Date(utcSec * 1000);
+  return Date.UTC(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate(),
+    d.getHours(),
+    d.getMinutes(),
+    d.getSeconds()
+  ) / 1000;
+};
+
+const alignTimestamp = (timestamp, interval) => {
+  const date = new Date(timestamp * 1000);
+  switch (interval) {
+    case 'minute':
+      return Math.floor(timestamp / 60) * 60;
+    case '5minute':
+      return Math.floor(timestamp / 300) * 300;
+    case '15minute':
+      return Math.floor(timestamp / 900) * 900;
+    case 'day': {
+      const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      return Math.floor(d.getTime() / 1000);
+    }
+    default:
+      return timestamp;
+  }
+};
+
 export default function TechnicalChart({ 
   selectedSymbol, 
   chartInterval, 
@@ -11,6 +41,8 @@ export default function TechnicalChart({
   const chartContainerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const hasFitContentRef = useRef(false);
+  const lastCandleRef = useRef(null);
 
   // Initialize Chart
   useEffect(() => {
@@ -71,13 +103,27 @@ export default function TechnicalChart({
   useEffect(() => {
     if (!selectedSymbol || !seriesRef.current) return;
 
+    // Reset flags for new symbol/interval
+    hasFitContentRef.current = false;
+    lastCandleRef.current = null;
+
     const loadChartData = async () => {
       try {
         const res = await fetch(`${apiUrl}/api/history/${selectedSymbol}?interval=${chartInterval}&days=5`);
         const json = await res.json();
         if (json.status === 'success' && json.data && seriesRef.current) {
-          seriesRef.current.setData(json.data);
-          chartRef.current.timeScale().fitContent();
+          const localData = json.data.map(d => ({
+            ...d,
+            time: toLocalTimestamp(d.time)
+          }));
+          seriesRef.current.setData(localData);
+          if (localData.length > 0) {
+            lastCandleRef.current = { ...localData[localData.length - 1] };
+          }
+          if (!hasFitContentRef.current) {
+            chartRef.current.timeScale().fitContent();
+            hasFitContentRef.current = true;
+          }
         }
       } catch (e) {
         console.error("Failed to load historical chart:", e);
@@ -96,20 +142,39 @@ export default function TechnicalChart({
     const active = watchlistData.find(item => item.symbol === selectedSymbol);
     if (active && active.ltp) {
       try {
-        const timestamp = Math.floor(Date.now() / 1000);
-        seriesRef.current.update({
-          time: timestamp,
-          open: active.ltp,
-          high: active.ltp,
-          low: active.ltp,
-          close: active.ltp
-        });
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const localNow = toLocalTimestamp(nowSeconds);
+        const alignedTime = alignTimestamp(localNow, chartInterval);
+        
+        let updateCandle;
+        if (lastCandleRef.current && alignedTime === lastCandleRef.current.time) {
+          updateCandle = {
+            time: alignedTime,
+            open: lastCandleRef.current.open,
+            high: Math.max(lastCandleRef.current.high, active.ltp),
+            low: Math.min(lastCandleRef.current.low, active.ltp),
+            close: active.ltp
+          };
+        } else {
+          // If we don't have a last candle or a new time interval has started
+          const openPrice = lastCandleRef.current ? lastCandleRef.current.close : active.ltp;
+          updateCandle = {
+            time: alignedTime,
+            open: openPrice,
+            high: Math.max(openPrice, active.ltp),
+            low: Math.min(openPrice, active.ltp),
+            close: active.ltp
+          };
+        }
+        
+        seriesRef.current.update(updateCandle);
+        lastCandleRef.current = updateCandle;
       } catch (e) {
         // Suppress order/timestamp sequence warning in local logs
         console.debug("Live tick chart update suppressed:", e);
       }
     }
-  }, [watchlistData, selectedSymbol]);
+  }, [watchlistData, selectedSymbol, chartInterval]);
 
   return (
     <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '12px', minHeight: '430px' }}>

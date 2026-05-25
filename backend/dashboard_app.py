@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import threading
 from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -844,6 +845,74 @@ async def execute_modify_sl(request: Request):
         return JSONResponse(res, status_code=500)
     return JSONResponse(res)
 
+def run_always_on_safety_guardian():
+    """
+    Background safety reconciler daemon. Runs every 15 seconds.
+    If it detects active broker positions without active stop loss orders,
+    it automatically places a Stop Loss (type SL) order to protect capital,
+    restricted by the absolute ₹2,500 risk limit.
+    """
+    import time
+    from kite_auth_manager import check_kite_auth, get_kite_client
+    from kite_order_manager import modify_or_place_sl
+    from kite_utils import round_to_tick
+    
+    print("🛡️ [Safety Guardian] Always-On Safety Guardian daemon started.")
+    
+    while True:
+        try:
+            # Check auth first
+            needs_login, _ = check_kite_auth()
+            if not needs_login:
+                kite = get_kite_client()
+                
+                # Fetch positions & orders
+                positions = kite.positions().get("net", [])
+                orders = kite.orders()
+                
+                # Active open stop-losses on exchange
+                open_statuses = ["OPEN", "TRIGGER PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED"]
+                active_sls = {o["tradingsymbol"] for o in orders if o.get("status") in open_statuses and o.get("order_type") in ["SL", "SL-M"]}
+                
+                for p in positions:
+                    qty = int(p.get("quantity", 0))
+                    if qty != 0:
+                        symbol = p.get("tradingsymbol")
+                        product = p.get("product", "MIS")
+                        
+                        # If the position has no active stop loss order on Zerodha
+                        if symbol not in active_sls:
+                            avg_price = float(p.get("average_price", 0.0))
+                            if avg_price <= 0:
+                                continue
+                                
+                            direction = "BUY" if qty > 0 else "SELL"
+                            exit_dir = "SELL" if direction == "BUY" else "BUY"
+                            
+                            # Default 1.5% SL distance
+                            sl_dist = avg_price * 0.015
+                            # Enforce global ₹2,500 risk limit
+                            max_sl_dist = 2500.0 / abs(qty)
+                            if sl_dist > max_sl_dist:
+                                sl_dist = max_sl_dist
+                                
+                            sl_price = round_to_tick(avg_price - sl_dist) if direction == "BUY" else round_to_tick(avg_price + sl_dist)
+                            
+                            print(f"🛡️ [Safety Guardian] Found unprotected position for {symbol} ({qty} shares). Auto-placing SL at ₹{sl_price}...")
+                            
+                            res = modify_or_place_sl(
+                                symbol=symbol,
+                                new_trigger_price=sl_price,
+                                quantity=abs(qty),
+                                transaction_type=exit_dir,
+                                product=product
+                            )
+                            print(f"🛡️ [Safety Guardian] Placement result for {symbol}: {res}")
+        except Exception as e:
+            print(f"❌ [Safety Guardian Error] Exception in safety loop: {e}")
+            
+        time.sleep(15.0)
+
 
 @app.on_event("startup")
 def startup_event():
@@ -854,8 +923,18 @@ def startup_event():
         from telegram_bot import start_telegram_polling
         start_telegram_polling()
         print("🤖 [Telegram] Background polling thread launched successfully.")
+        
+        # Auto-launch the WebSocket Data Logger on boot if daily access token is valid
+        needs_login, _ = check_kite_auth()
+        if not needs_login:
+            start_logger()
+            print("📈 [Logger] Auto-started background run_data_logger.py successfully.")
+            
+        # Launch Always-On Safety Guardian thread
+        threading.Thread(target=run_always_on_safety_guardian, daemon=True).start()
+        print("🛡️ [Safety Guardian] Background safety thread launched successfully.")
     except Exception as e:
-        print(f"❌ [Telegram] Failed to start background polling thread: {e}")
+        print(f"❌ [Startup] Failed during automatic process launching: {e}")
 
 
 # -------------------------------------------------------------

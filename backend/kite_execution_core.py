@@ -525,7 +525,13 @@ class KiteExecutionCore:
                     
                     direction = "BUY" if qty > 0 else "SELL"
                     # Default tight safety stop (1.5%)
-                    sl_price = round_to_tick(avg_price * 0.985) if direction == "BUY" else round_to_tick(avg_price * 1.015)
+                    sl_dist = avg_price * 0.015
+                    # Enforce NJ's ₹2,500 max risk limit
+                    max_sl_dist = 2500.0 / abs(qty)
+                    if sl_dist > max_sl_dist:
+                        sl_dist = max_sl_dist
+                    
+                    sl_price = round_to_tick(avg_price - sl_dist) if direction == "BUY" else round_to_tick(avg_price + sl_dist)
                     target_price = round_to_tick(avg_price * 1.03) if direction == "BUY" else round_to_tick(avg_price * 0.97)
                     
                     # Place live bracket stop
@@ -631,6 +637,10 @@ class KiteExecutionCore:
 # MAIN RUNNER SCRIPT ENTRY
 # -------------------------------------------------------------
 if __name__ == "__main__":
-    # Boot default dry-run mode simulator for safety verification
-    engine = KiteExecutionCore(dry_run=True)
+    import sys
+    # Boot default dry-run mode simulator for safety verification unless 'live' is specified
+    is_dry = True
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "live":
+        is_dry = False
+    engine = KiteExecutionCore(dry_run=is_dry)
     engine.run_execution_loop()

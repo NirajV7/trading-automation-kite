@@ -351,7 +351,7 @@ export default function App() {
   const selectChartSymbol = (symbol) => {
     setSelectedSymbol(symbol);
     // Switch to chart tab if user clicked an instrument from another view
-    setActiveTab('radar');
+    setActiveTab('chart');
   };
 
   return (
@@ -416,7 +416,31 @@ export default function App() {
             outline: 'none'
           }}
         >
-          📡 Radar & Charts
+          📡 Watchlist Radar
+        </button>
+        <button 
+          onClick={() => setActiveTab('chart')}
+          style={{
+            background: activeTab === 'chart' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'chart' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'chart' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'chart' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          📈 Technical Chart
         </button>
         <button 
           onClick={() => setActiveTab('positions')}
@@ -471,14 +495,22 @@ export default function App() {
       {/* 3. Main Workspace Area */}
       <div style={{ flexGrow: 1, overflow: 'hidden', position: 'relative' }}>
         
-        {/* Tab 1: Radar & Charts */}
+        {/* Tab 1: Watchlist Radar */}
         {activeTab === 'radar' && (
           <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
             <WatchlistScanners 
               watchlistData={watchlistData} 
               onSelectSymbol={selectChartSymbol}
               onRemove={removeFromWatchlist}
+              onAddToWatchlist={addToWatchlist}
+              apiUrl={API_URL}
             />
+          </main>
+        )}
+
+        {/* Tab 2: Technical Chart */}
+        {activeTab === 'chart' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
             <TechnicalChart 
               selectedSymbol={selectedSymbol}
               chartInterval={chartInterval}
@@ -489,7 +521,7 @@ export default function App() {
           </main>
         )}
 
-        {/* Tab 2: Risk & Positions */}
+        {/* Tab 3: Risk & Positions */}
         {activeTab === 'positions' && (
           <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
             <MetricCards 
@@ -512,7 +544,7 @@ export default function App() {
           </main>
         )}
 
-        {/* Tab 3: System Operations */}
+        {/* Tab 4: System Operations */}
         {activeTab === 'system' && (
           <main className="main-workspace" style={{ height: '100%', overflowY: 'auto', display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px' }}>
             <EngineControls 
