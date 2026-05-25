@@ -279,6 +279,11 @@ def kite_auth_callback(request_token: str = None):
         
     success, message = exchange_kite_token(request_token)
     if success:
+        try:
+            start_logger()
+            message += " and background data logger started."
+        except Exception as logger_err:
+            message += f" (Logger start failed: {logger_err})"
         return JSONResponse({"status": "success", "message": message})
     return JSONResponse({"status": "error", "message": message}, status_code=500)
 
@@ -586,8 +591,8 @@ def api_positions():
         try:
             with open(config.LIVE_MARKET_DATA_FILE, "r") as f:
                 market_snapshot = json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ [Positions API] Failed to read live market data file: {e}")
 
     enriched_positions = []
     
@@ -864,6 +869,14 @@ def run_always_on_safety_guardian():
             # Check auth first
             needs_login, _ = check_kite_auth()
             if not needs_login:
+                # Self-healing: Ensure logger is running
+                if not is_process_running("run_data_logger.py"):
+                    print("🛡️ [Safety Guardian] Data Logger not running. Auto-recovering logger process...")
+                    try:
+                        start_logger()
+                    except Exception as le:
+                        print(f"❌ [Safety Guardian] Failed to auto-recover logger: {le}")
+                        
                 kite = get_kite_client()
                 
                 # Fetch positions & orders

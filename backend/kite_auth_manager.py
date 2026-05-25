@@ -15,7 +15,8 @@ from config import (
 # Whitelisted IPs for Zerodha connection audits
 KITE_WHITELISTED_IPS = [
     "2401:4900:883a:fb23:799d:9a4b:4b9d:11ba",
-    "2409:40f2:3a:8df0:c4a2:bd76:cea3:b353"
+    "2409:40f2:3a:8df0:c4a2:bd76:cea3:b353",
+    "2409:40f2:103e:8cd7:dea:6b37:43cb:3c4a"
 ]
 
 def check_kite_auth():

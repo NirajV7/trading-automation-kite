@@ -45,10 +45,16 @@ def handle_auth_failure(e):
     try:
         import kiteconnect.exceptions as ex
         is_auth_err = False
+        err_msg = str(e).lower()
+        
+        # Do not delete token for IP whitelist permission errors
+        if "ip" in err_msg and ("not allowed" in err_msg or "whitelist" in err_msg):
+            print(f"⚠️ [Kite IP Whitelist Error] IP is not whitelisted: {e}. Skipping token deletion.")
+            return
+            
         if isinstance(e, (ex.TokenException, ex.PermissionException)):
             is_auth_err = True
         else:
-            err_msg = str(e).lower()
             if "incorrect" in err_msg or "token" in err_msg or "auth" in err_msg or "api_key" in err_msg:
                 is_auth_err = True
                 
