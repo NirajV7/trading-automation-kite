@@ -155,6 +155,10 @@ export default function PositionsTracker({
                             <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-emerald)', fontWeight: 600 }}>
                               ₹{p.target_price.toFixed(2)}
                             </span>
+                          ) : p.engine_target ? (
+                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-cyan)', fontWeight: 600 }} title="Virtual Target Managed by Daemon">
+                              ₹{p.engine_target.toFixed(2)} (VT)
+                            </span>
                           ) : (
                             <span style={{ color: 'var(--color-gold)', fontSize: '0.9em', fontWeight: 600 }}>
                               ⚠️ GHOST LIMIT
