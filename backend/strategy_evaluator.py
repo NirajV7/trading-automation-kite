@@ -75,6 +75,9 @@ class StrategyEvaluatorMixin:
         avg_vol_15m = metrics.get("avg_vol_15m", 0.0)
         active_vol_5m = metrics.get("active_vol_5m", 0.0)
         avg_vol_5m = metrics.get("avg_vol_5m", 0.0)
+        
+        prev_high_5m = metrics.get("prev_high_5m")
+        prev_low_5m = metrics.get("prev_low_5m")
 
         orb = self.orb_ranges.get(symbol)
         if not orb:
@@ -100,6 +103,11 @@ class StrategyEvaluatorMixin:
 
             # Gate 4: RSI Momentum Guard (50 <= RSI <= 70)
             if rsi_5m is not None and (rsi_5m < 50.0 or rsi_5m > 70.0):
+                return
+
+            # Gate 5: Fresh Breakout Gate (Ignore historical breakouts if already trading outside boundaries in previous 5m candle)
+            if prev_high_5m is not None and prev_high_5m > high_boundary:
+                self.log_message(f"Scan {symbol}: LONG failed Gate 5 (Not a fresh breakout. prev_high_5m: {prev_high_5m} > high_boundary: {high_boundary})")
                 return
 
             # Gate 6: Volume Expansion
@@ -168,6 +176,11 @@ class StrategyEvaluatorMixin:
 
             # Gate 4: RSI Momentum Guard (30 <= RSI <= 50)
             if rsi_5m is not None and (rsi_5m < 30.0 or rsi_5m > 50.0):
+                return
+
+            # Gate 5: Fresh Breakout Gate (Ignore historical breakouts if already trading outside boundaries in previous 5m candle)
+            if prev_low_5m is not None and prev_low_5m < low_boundary:
+                self.log_message(f"Scan {symbol}: SHORT failed Gate 5 (Not a fresh breakout. prev_low_5m: {prev_low_5m} < low_boundary: {low_boundary})")
                 return
 
             # Gate 6: Volume Expansion

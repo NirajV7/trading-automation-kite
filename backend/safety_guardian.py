@@ -85,8 +85,8 @@ def run_always_on_safety_guardian():
                             if symbol not in active_sls:
                                 # Default 1.5% SL distance
                                 sl_dist = avg_price * 0.015
-                                # Enforce global ₹2,500 risk limit
-                                max_sl_dist = 2500.0 / abs(qty)
+                                # Enforce global risk limit from config
+                                max_sl_dist = config.RISK_PER_TRADE / abs(qty)
                                 if sl_dist > max_sl_dist:
                                     sl_dist = max_sl_dist
                                     

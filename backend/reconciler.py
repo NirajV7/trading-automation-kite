@@ -1,3 +1,4 @@
+from config import RISK_PER_TRADE
 from kite_auth_manager import get_kite_client
 from kite_order_manager import modify_or_place_sl
 from kite_utils import round_to_tick, handle_auth_failure
@@ -42,8 +43,8 @@ class ReconcilerMixin:
                     direction = "BUY" if qty > 0 else "SELL"
                     # Default tight safety stop (1.5%)
                     sl_dist = avg_price * 0.015
-                    # Enforce NJ's ₹2,500 max risk limit
-                    max_sl_dist = 2500.0 / abs(qty)
+                    # Enforce NJ's max risk limit from config
+                    max_sl_dist = RISK_PER_TRADE / abs(qty)
                     if sl_dist > max_sl_dist:
                         sl_dist = max_sl_dist
                     

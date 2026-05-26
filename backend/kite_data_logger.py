@@ -244,6 +244,8 @@ class KiteDataLogger:
                 "adr_absolute": round(self.adr_cache[sym]["abs"], 2),
                 "avg_vol_15m": avg_vol_15m,
                 "avg_vol_5m": avg_vol_5m,
+                "prev_high_5m": c5m[-1]["high"] if c5m else None,
+                "prev_low_5m": c5m[-1]["low"] if c5m else None,
                 
                 # 1m
                 "ema20_1m": ema20_1m[-1] if ema20_1m else None,

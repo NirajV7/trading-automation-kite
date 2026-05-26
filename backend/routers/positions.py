@@ -131,7 +131,7 @@ def api_positions():
                 today_range = max(0.0, avg_price - last_price)
             adr_exhaustion_pct = (today_range / adr_abs_val) * 100.0
 
-        # 4. Risk Assessments (₹2500 max limit)
+        # 4. Risk Assessments (using config.RISK_PER_TRADE limit)
         allocated_risk = 0.0
         risk_pct = 0.0
         
