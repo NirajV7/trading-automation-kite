@@ -109,13 +109,14 @@ class KiteExecutionCore(
             except Exception as e:
                 self.log_message(f"Error loading symbol mappings: {e}", is_error=True)
 
-    def load_active_trades(self):
+    def load_active_trades(self, silent=False):
         """Reads persisted active trades from active_trades.json."""
         if os.path.exists(ACTIVE_TRADES_FILE):
             try:
                 with open(ACTIVE_TRADES_FILE, "r") as f:
                     self.active_trades = json.load(f)
-                self.log_message(f"Loaded {len(self.active_trades)} active trades from disk cache.")
+                if not silent:
+                    self.log_message(f"Loaded {len(self.active_trades)} active trades from disk cache.")
             except Exception as e:
                 self.log_message(f"Failed to load active trades: {e}", is_error=True)
 
@@ -148,7 +149,7 @@ class KiteExecutionCore(
                     last_audit = now
                     
                 # 2. Reload active trades from disk to synchronize with remote entries (Telegram / Dashboard)
-                self.load_active_trades()
+                self.load_active_trades(silent=True)
                 
                 # 3. Read live data cache from logger updates
                 if os.path.exists(LIVE_MARKET_DATA_FILE):
