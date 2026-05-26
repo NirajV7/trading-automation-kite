@@ -5,6 +5,16 @@ from datetime import datetime, time as datetime_time
 from kite_utils import round_to_tick
 
 class StrategyEvaluatorMixin:
+    def log_gate_failure(self, symbol, gate_key, message):
+        if not hasattr(self, 'last_logged_failures'):
+            self.last_logged_failures = {}
+        now = time.time()
+        key = f"{symbol}_{gate_key}"
+        last_time, last_msg = self.last_logged_failures.get(key, (0.0, ""))
+        if message != last_msg or now - last_time > 300.0:
+            self.log_message(message)
+            self.last_logged_failures[key] = (now, message)
+
     def evaluate_strategy_signals(self, symbol, current_price, metrics):
         """
         Evaluates signals for scan watchlists.
@@ -106,7 +116,7 @@ class StrategyEvaluatorMixin:
 
             # Gate 5: Fresh Breakout Gate (Ignore historical breakouts if already trading outside boundaries in previous 5m candle)
             if prev_high_5m is not None and prev_high_5m > high_boundary:
-                self.log_message(f"Scan {symbol}: LONG failed Gate 5 (Not a fresh breakout. prev_high_5m: {prev_high_5m} > high_boundary: {high_boundary})")
+                self.log_gate_failure(symbol, "gate_5_long", f"Scan {symbol}: LONG failed Gate 5 (Not a fresh breakout. prev_high_5m: {prev_high_5m} > high_boundary: {high_boundary})")
                 return
 
             # Gate 6: Volume Expansion
@@ -133,7 +143,7 @@ class StrategyEvaluatorMixin:
             if adr_absolute > 0:
                 exhaustion_pct = (consumed / adr_absolute) * 100.0
                 if exhaustion_pct > 70.0:
-                    self.log_message(f"Scan {symbol}: LONG failed Gate 8 (ADR exhausted: {exhaustion_pct:.1f}% > 70%)")
+                    self.log_gate_failure(symbol, "gate_8_long", f"Scan {symbol}: LONG failed Gate 8 (ADR exhausted: {exhaustion_pct:.1f}% > 70%)")
                     return
             else:
                 if current_price > low_ref * 1.015:
@@ -174,7 +184,7 @@ class StrategyEvaluatorMixin:
 
             # Gate 5: Fresh Breakout Gate (Ignore historical breakouts if already trading outside boundaries in previous 5m candle)
             if prev_low_5m is not None and prev_low_5m < low_boundary:
-                self.log_message(f"Scan {symbol}: SHORT failed Gate 5 (Not a fresh breakout. prev_low_5m: {prev_low_5m} < low_boundary: {low_boundary})")
+                self.log_gate_failure(symbol, "gate_5_short", f"Scan {symbol}: SHORT failed Gate 5 (Not a fresh breakout. prev_low_5m: {prev_low_5m} < low_boundary: {low_boundary})")
                 return
 
             # Gate 6: Volume Expansion
@@ -201,7 +211,7 @@ class StrategyEvaluatorMixin:
             if adr_absolute > 0:
                 exhaustion_pct = (consumed / adr_absolute) * 100.0
                 if exhaustion_pct > 70.0:
-                    self.log_message(f"Scan {symbol}: SHORT failed Gate 8 (ADR exhausted: {exhaustion_pct:.1f}% > 70%)")
+                    self.log_gate_failure(symbol, "gate_8_short", f"Scan {symbol}: SHORT failed Gate 8 (ADR exhausted: {exhaustion_pct:.1f}% > 70%)")
                     return
             else:
                 if current_price < high_ref * 0.985:
