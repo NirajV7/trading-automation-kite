@@ -11,8 +11,7 @@ from config import (
     TRADE_JOURNAL_CSV,
     ENGINE_LOG,
     INSTRUMENT_MAPPING_FILE,
-    LIVE_MARKET_DATA_FILE,
-    REQUIRE_MANUAL_APPROVAL
+    LIVE_MARKET_DATA_FILE
 )
 from kite_auth_manager import get_kite_client
 from kite_utils import handle_auth_failure
@@ -25,31 +24,11 @@ from position_monitor import PositionMonitorMixin
 from reconciler import ReconcilerMixin
 
 # -------------------------------------------------------------
-# GLOBAL HELPER FOR TELEGRAM NOTIFICATIONS
+# STUB: Notifications (Telegram removed — log only)
 # -------------------------------------------------------------
 def send_telegram_alert(message):
-    """
-    Sends a formatted notification to the principal's iPhone Telegram Bot.
-    Uses the tokens and chat ID defined in the environment.
-    """
-    import urllib.request
-    import urllib.parse
-    from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"⚠️ Telegram config missing. Alert suppressed: {message}")
-        return
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        # Format payloads with HTML tags for clean styling on the iPhone screen
-        data = urllib.parse.urlencode({
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": f"🤖 <b>KITE CORE ALERT</b>\n\n{message}",
-            "parse_mode": "HTML"
-        }).encode("utf-8")
-        req = urllib.request.Request(url, data=data)
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as e:
-        print(f"❌ Telegram alert failed: {e}")
+    """Stub: logs the alert message. Telegram integration removed."""
+    print(f"📢 [ALERT] {message}")
 
 
 # -------------------------------------------------------------
@@ -148,7 +127,7 @@ class KiteExecutionCore(
                     self.audit_active_positions_with_broker()
                     last_audit = now
                     
-                # 2. Reload active trades from disk to synchronize with remote entries (Telegram / Dashboard)
+                # 2. Reload active trades from disk to synchronize with remote entries (Dashboard)
                 self.load_active_trades(silent=True)
                 
                 # 3. Read live data cache from logger updates

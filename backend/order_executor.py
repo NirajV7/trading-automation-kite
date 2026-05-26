@@ -36,7 +36,6 @@ class OrderExecutorMixin:
 
     def trigger_mock_order_placement(self, symbol, direction, qty, price, sl, target, strategy):
         """Simulates placing and filling bracket orders instantly for dry-run trading."""
-        from kite_execution_core import send_telegram_alert
         order_id = f"MOCK_ENTRY_{int(time.time())}"
         sl_id = f"MOCK_SL_{int(time.time())}"
         target_id = f"MOCK_TARGET_{int(time.time())}"
@@ -55,22 +54,10 @@ class OrderExecutorMixin:
             }
             self.save_active_trades()
             
-        alert_msg = (
-            f"🟢 <b>SIMULATED ENTRY FILLED</b>\n"
-            f"<b>Stock:</b> {symbol}\n"
-            f"<b>Direction:</b> {direction}\n"
-            f"<b>Quantity:</b> {qty}\n"
-            f"<b>Entry Price:</b> ₹{price:.2f}\n"
-            f"<b>Stop Loss:</b> ₹{sl:.2f}\n"
-            f"<b>Target:</b> ₹{target:.2f}\n"
-            f"<b>Strategy:</b> {strategy}"
-        )
-        send_telegram_alert(alert_msg)
-        self.log_message(f"[DRY-RUN] Filled mock trade for {symbol}. Qty: {qty} @ ₹{price}")
+        self.log_message(f"[DRY-RUN] Filled mock {direction} for {symbol}. Qty: {qty} @ ₹{price}, SL: ₹{sl}, Target: ₹{target}")
 
     def execute_live_order_placement(self, symbol, direction, qty, price, sl, target, strategy):
         """Submits real entry orders and bracket safety orders to Zerodha Kite."""
-        from kite_execution_core import send_telegram_alert
         try:
             self.kite = get_kite_client()
             
@@ -140,18 +127,7 @@ class OrderExecutorMixin:
                 }
                 self.save_active_trades()
                 
-            alert_msg = (
-                f"🚀 <b>LIVE ENTRY FILLED</b>\n"
-                f"<b>Stock:</b> {symbol}\n"
-                f"<b>Direction:</b> {direction}\n"
-                f"<b>Quantity:</b> {qty}\n"
-                f"<b>Fill Price:</b> ₹{fill_price:.2f}\n"
-                f"<b>Stop Loss:</b> ₹{sl:.2f}\n"
-                f"<b>Target:</b> ₹{target:.2f}\n"
-                f"<b>Order ID:</b> {order_id}"
-            )
-            send_telegram_alert(alert_msg)
-            self.log_message(f"Live entry executed for {symbol}. Target: {target_id}, SL: {sl_id}")
+            self.log_message(f"🚀 LIVE ENTRY FILLED: {direction} {qty} {symbol} @ ₹{fill_price:.2f}. SL: ₹{sl:.2f}, Target: ₹{target:.2f}, Order ID: {order_id}")
             
         except Exception as e:
             self.log_message(f"Order routing failed for {symbol}: {e}", is_error=True)
@@ -188,7 +164,6 @@ class OrderExecutorMixin:
 
     def close_active_trade_record(self, symbol, exit_price, reason):
         """Clears local state tracking records and logs exit data to journal."""
-        from kite_execution_core import send_telegram_alert
         trade = self.active_trades.get(symbol)
         if not trade:
             return
@@ -212,10 +187,4 @@ class OrderExecutorMixin:
                 del self.active_trades[symbol]
             self.save_active_trades()
             
-        alert_msg = (
-            f"🔴 <b>TRADE EXIT COMPLETE</b>\n"
-            f"<b>Stock:</b> {symbol}\n"
-            f"<b>Exit Price:</b> ₹{exit_price:.2f}\n"
-            f"<b>Reason:</b> {reason}"
-        )
-        send_telegram_alert(alert_msg)
+        self.log_message(f"🔴 TRADE EXIT: {symbol} @ ₹{exit_price:.2f} — Reason: {reason}")

@@ -2,7 +2,6 @@ import os
 import json
 import time
 from datetime import datetime, time as datetime_time
-from config import REQUIRE_MANUAL_APPROVAL
 from kite_utils import round_to_tick
 
 class StrategyEvaluatorMixin:
@@ -151,15 +150,10 @@ class StrategyEvaluatorMixin:
             qty = self.calculate_position_size(symbol, current_price, sl_price)
             if qty > 0:
                 self.log_message(f"🟢 CONVERGENCE PERFECT - ORB BUY triggered for {symbol} at {current_price}")
-                if REQUIRE_MANUAL_APPROVAL:
-                    from telegram_bot import send_signal_approval_request
-                    send_signal_approval_request(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB", dry_run=self.dry_run)
-                    self.cooldowns[symbol] = time.time() + 300.0
+                if self.dry_run:
+                    self.trigger_mock_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
                 else:
-                    if self.dry_run:
-                        self.trigger_mock_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
-                    else:
-                        self.execute_live_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
+                    self.execute_live_order_placement(symbol, "BUY", qty, current_price, sl_price, target_price, "ORB")
                     
         # -------------------------------------------------------------
         # evaluate SHORT / SELL setups
@@ -222,12 +216,7 @@ class StrategyEvaluatorMixin:
             qty = self.calculate_position_size(symbol, current_price, sl_price)
             if qty > 0:
                 self.log_message(f"🟢 CONVERGENCE PERFECT - ORB SELL triggered for {symbol} at {current_price}")
-                if REQUIRE_MANUAL_APPROVAL:
-                    from telegram_bot import send_signal_approval_request
-                    send_signal_approval_request(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB", dry_run=self.dry_run)
-                    self.cooldowns[symbol] = time.time() + 300.0
+                if self.dry_run:
+                    self.trigger_mock_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")
                 else:
-                    if self.dry_run:
-                        self.trigger_mock_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")
-                    else:
-                        self.execute_live_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")
+                    self.execute_live_order_placement(symbol, "SELL", qty, current_price, sl_price, target_price, "ORB")

@@ -31,7 +31,6 @@ class PositionMonitorMixin:
                 
                 # If live, modify stop loss order on Kite
                 if not self.dry_run:
-                    from kite_execution_core import send_telegram_alert
                     try:
                         sl_id = trade.get("sl_id")
                         if sl_id:
@@ -42,7 +41,6 @@ class PositionMonitorMixin:
                                 quantity=trade["qty"],
                                 transaction_type="SELL" if direction == "BUY" else "BUY"
                             )
-                            send_telegram_alert(f"🏆 Trailed {symbol} Stop Loss to break-even (cost: ₹{new_sl:.2f}).")
                     except Exception as e:
                         self.log_message(f"Failed to trail SL on Kite: {e}", is_error=True)
 

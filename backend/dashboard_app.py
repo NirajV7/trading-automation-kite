@@ -35,13 +35,9 @@ app.include_router(orders.router)
 @app.on_event("startup")
 def startup_event():
     """
-    Launches background long-polling listener for interactive Telegram Bot controls.
+    Auto-launches background services on dashboard boot.
     """
     try:
-        from telegram_bot import start_telegram_polling
-        start_telegram_polling()
-        print("🤖 [Telegram] Background polling thread launched successfully.")
-        
         # Auto-launch the WebSocket Data Logger on boot if daily access token is valid
         needs_login, _ = check_kite_auth()
         if not needs_login:
