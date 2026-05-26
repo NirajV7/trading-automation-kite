@@ -22,6 +22,7 @@ from order_executor import OrderExecutorMixin
 from strategy_evaluator import StrategyEvaluatorMixin
 from position_monitor import PositionMonitorMixin
 from reconciler import ReconcilerMixin
+from radar_strategy import RadarStrategyMixin
 
 # -------------------------------------------------------------
 # STUB: Notifications (Telegram removed — log only)
@@ -39,7 +40,8 @@ class KiteExecutionCore(
     OrderExecutorMixin,
     StrategyEvaluatorMixin,
     PositionMonitorMixin,
-    ReconcilerMixin
+    ReconcilerMixin,
+    RadarStrategyMixin
 ):
     """
     Manages strategy evaluations (ORB & Volumetric Spikes), handles risk 
@@ -61,9 +63,11 @@ class KiteExecutionCore(
         self.active_trades = {}  # {SYMBOL: {entry_price, qty, direction, sl, target, sl_id, target_id, strategy}}
         self.cooldowns = {}       # {SYMBOL: cooldown_end_timestamp}
         self.orb_ranges = {}      # {SYMBOL: {"high": value, "low": value}}
+        self.radar_candidates = {} # {SYMBOL: candidate_details}
         
-        # Load existing active trades from disk to prevent loss on restart
+        # Load existing active trades and radar candidates from disk
         self.load_active_trades()
+        self.load_radar_candidates()
         self.log_message(f"Execution Core initialized. Mode: {'DRY RUN' if dry_run else 'LIVE'}")
 
     def log_message(self, msg, is_error=False):
@@ -164,6 +168,9 @@ class KiteExecutionCore(
                         else:
                             # Evaluate breakout triggers on inactive scanners
                             self.evaluate_strategy_signals(sym, ltp, ticker_data)
+                            
+                            # Evaluate volume spike radar on all active tickers (Nifty 50 + watchlist)
+                            self.evaluate_radar_signals(sym, ltp, ticker_data)
                             
             except Exception as e:
                 self.log_message(f"Exception inside execution loop: {e}", is_error=True)

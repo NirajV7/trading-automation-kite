@@ -234,6 +234,19 @@ class KiteDataLogger:
             volumes_5m = [c["volume"] for c in c5m[-20:]]
             avg_vol_5m = sum(volumes_5m) / len(volumes_5m) if volumes_5m else 0.0
 
+            volumes_1m = [c["volume"] for c in c1m[-20:]]
+            avg_vol_1m = sum(volumes_1m) / len(volumes_1m) if volumes_1m else 0.0
+
+            # Safe string format for last closed 5m timestamp
+            last_closed_5m = c5m[-1]["date"] if c5m else None
+            if last_closed_5m:
+                if hasattr(last_closed_5m, "strftime"):
+                    last_closed_5m_str = last_closed_5m.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    last_closed_5m_str = str(last_closed_5m)
+            else:
+                last_closed_5m_str = None
+
             # Populate latest indicators in live_state
             if sym not in self.live_state:
                 self.live_state[sym] = {}
@@ -244,8 +257,21 @@ class KiteDataLogger:
                 "adr_absolute": round(self.adr_cache[sym]["abs"], 2),
                 "avg_vol_15m": avg_vol_15m,
                 "avg_vol_5m": avg_vol_5m,
+                "avg_vol_1m": avg_vol_1m,
+                
+                # 1m closed candle stats
+                "prev_open_1m": c1m[-1]["open"] if c1m else None,
+                "prev_close_1m": c1m[-1]["close"] if c1m else None,
+                "prev_high_1m": c1m[-1]["high"] if c1m else None,
+                "prev_low_1m": c1m[-1]["low"] if c1m else None,
+                "prev_volume_1m": c1m[-1]["volume"] if c1m else None,
+
+                # 5m closed candle stats
                 "prev_high_5m": c5m[-1]["high"] if c5m else None,
                 "prev_low_5m": c5m[-1]["low"] if c5m else None,
+                "prev_close_5m": c5m[-1]["close"] if c5m else None,
+                "prev_volume_5m": c5m[-1]["volume"] if c5m else None,
+                "last_closed_5m_time": last_closed_5m_str,
                 
                 # 1m
                 "ema20_1m": ema20_1m[-1] if ema20_1m else None,
