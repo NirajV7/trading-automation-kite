@@ -156,7 +156,21 @@ class KiteExecutionCore(
                     with open(LIVE_MARKET_DATA_FILE, "r") as f:
                         market_snapshot = json.load(f)
                         
-                    for sym in NIFTY_50_TICKERS:
+                    # Load current watchlist symbols dynamically
+                    from config import WATCHLIST_FILE
+                    wl_symbols = []
+                    if os.path.exists(WATCHLIST_FILE):
+                        try:
+                            with open(WATCHLIST_FILE, "r") as f:
+                                wl = json.load(f)
+                            def clean_sym(s):
+                                return s.replace("NSE:", "").replace("-EQ", "").replace("-BE", "").upper()
+                            wl_symbols = [clean_sym(s) for s in wl.get("buy", []) + wl.get("sell", [])]
+                        except Exception:
+                            pass
+                    
+                    active_symbols = list(set(NIFTY_50_TICKERS + wl_symbols))
+                    for sym in active_symbols:
                         ticker_data = market_snapshot.get(sym)
                         if not ticker_data:
                             continue

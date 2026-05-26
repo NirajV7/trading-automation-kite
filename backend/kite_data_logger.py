@@ -28,11 +28,15 @@ class KiteDataLogger:
         self.symbol_to_token = {}
         self.token_to_symbol = {}
         
+        # Get watchlist symbols at boot
+        watchlist_symbols = self.get_current_watchlist_symbols()
+        all_initial_symbols = list(set(NIFTY_50_TICKERS) | watchlist_symbols)
+        
         # Historical & live deques (capped to 300 to prevent memory growth)
-        self.candles_1m = {sym: deque(maxlen=300) for sym in NIFTY_50_TICKERS}
-        self.candles_5m = {sym: deque(maxlen=300) for sym in NIFTY_50_TICKERS}
-        self.candles_15m = {sym: deque(maxlen=300) for sym in NIFTY_50_TICKERS}
-        self.candles_day = {sym: deque(maxlen=50) for sym in NIFTY_50_TICKERS}
+        self.candles_1m = {sym: deque(maxlen=300) for sym in all_initial_symbols}
+        self.candles_5m = {sym: deque(maxlen=300) for sym in all_initial_symbols}
+        self.candles_15m = {sym: deque(maxlen=300) for sym in all_initial_symbols}
+        self.candles_day = {sym: deque(maxlen=50) for sym in all_initial_symbols}
         
         # Current active open candles
         # {symbol: {open, high, low, close, volume, start_volume_traded, date}}
@@ -41,7 +45,7 @@ class KiteDataLogger:
         self.active_15m = {}
         
         # Cached ADR values (since they are calculated from daily candles on startup)
-        self.adr_cache = {sym: {"pct": 0.0, "abs": 0.0} for sym in NIFTY_50_TICKERS}
+        self.adr_cache = {sym: {"pct": 0.0, "abs": 0.0} for sym in all_initial_symbols}
         
         # Latest live state for the frontend / execution core
         # {symbol: {ltp, vwap, ema20_5m, rsi_5m, ...}}
@@ -100,13 +104,9 @@ class KiteDataLogger:
                     temp_sym_to_tok[symbol] = int(token)
                     temp_tok_to_sym[int(token)] = symbol
                     
-            # Map Nifty 50
-            for sym in NIFTY_50_TICKERS:
-                if sym in temp_sym_to_tok:
-                    self.symbol_to_token[sym] = temp_sym_to_tok[sym]
-                    self.token_to_symbol[temp_sym_to_tok[sym]] = sym
-                else:
-                    self.log_message(f"Warning: ticker {sym} not found in Zerodha instruments list.", is_error=True)
+            # Save all instruments to cache
+            self.symbol_to_token = temp_sym_to_tok
+            self.token_to_symbol = temp_tok_to_sym
             
             # Save mappings to cache file
             with open(INSTRUMENT_MAPPING_FILE, "w") as f:
@@ -131,12 +131,13 @@ class KiteDataLogger:
         m15_from = today - timedelta(days=20) # 20 calendar days for 15m candles (~500 bars)
         m1_from = today - timedelta(days=3)   # 3 calendar days for 1m candles (~1125 bars)
 
-        for idx, sym in enumerate(NIFTY_50_TICKERS):
+        active_bootstrap_symbols = list(set(NIFTY_50_TICKERS) | self.get_current_watchlist_symbols())
+        for idx, sym in enumerate(active_bootstrap_symbols):
             token = self.symbol_to_token.get(sym)
             if not token:
                 continue
                 
-            self.log_message(f"Bootstrapping historical candles for {sym} ({idx+1}/{len(NIFTY_50_TICKERS)})...")
+            self.log_message(f"Bootstrapping historical candles for {sym} ({idx+1}/{len(active_bootstrap_symbols)})...")
             
             # Daily candles for ADR calculation
             try:
@@ -272,6 +273,10 @@ class KiteDataLogger:
         token = tick.get("instrument_token")
         sym = self.token_to_symbol.get(token)
         if not sym:
+            return
+            
+        # Ignore tick if symbol is not initialized (prevent KeyError during dynamic addition bootstrapping)
+        if sym not in self.candles_1m:
             return
             
         ltp = tick.get("last_price")
@@ -425,3 +430,131 @@ class KiteDataLogger:
                 os.replace(temp_path, LIVE_MARKET_DATA_FILE)
             except Exception as e:
                 pass
+
+    def get_current_watchlist_symbols(self):
+        """Loads and returns a set of cleaned symbols from data/watchlist.json."""
+        from config import WATCHLIST_FILE
+        if not os.path.exists(WATCHLIST_FILE):
+            return set()
+        try:
+            with open(WATCHLIST_FILE, "r") as f:
+                wl = json.load(f)
+            def clean_sym(s):
+                return s.replace("NSE:", "").replace("-EQ", "").replace("-BE", "").upper()
+            return set(clean_sym(s) for s in wl.get("buy", []) + wl.get("sell", []))
+        except Exception:
+            return set()
+
+    def start_watchlist_monitor(self):
+        """Starts a background thread to dynamically watch and subscribe to watchlist changes."""
+        threading.Thread(target=self.watchlist_monitor_loop, daemon=True).start()
+
+    def watchlist_monitor_loop(self):
+        """Monitors data/watchlist.json every 5 seconds for new additions."""
+        time.sleep(10.0) # wait briefly for startup boot to settle
+        self.log_message("Watchlist monitor thread started successfully.")
+        
+        # Track symbols already bootstrapped
+        tracked_symbols = set(NIFTY_50_TICKERS) | self.get_current_watchlist_symbols()
+        
+        while True:
+            time.sleep(5.0)
+            try:
+                current_wl = self.get_current_watchlist_symbols()
+                new_symbols = current_wl - tracked_symbols
+                
+                if new_symbols:
+                    self.log_message(f"Watchlist monitor: Detected new symbols to subscribe: {list(new_symbols)}")
+                    for sym in new_symbols:
+                        token = self.symbol_to_token.get(sym)
+                        if not token:
+                            self.log_message(f"Watchlist: Symbol {sym} not found in token cache. Refreshing instruments...")
+                            self.load_or_fetch_instrument_tokens()
+                            token = self.symbol_to_token.get(sym)
+                            
+                        if token:
+                            self.log_message(f"Watchlist: Bootstrapping indicators for {sym} (Token: {token})...")
+                            self.bootstrap_single_symbol(sym, token)
+                            
+                            # Subscribe WebSocket if connected
+                            if self.kws:
+                                self.kws.subscribe([token])
+                                self.kws.set_mode(self.kws.MODE_FULL, [token])
+                                self.log_message(f"Watchlist: Successfully subscribed WebSocket to {sym} (Token: {token})")
+                            
+                            tracked_symbols.add(sym)
+                        else:
+                            self.log_message(f"Watchlist error: Symbol {sym} could not be resolved. Skipping.", is_error=True)
+            except Exception as e:
+                self.log_message(f"Exception in watchlist monitor loop: {e}", is_error=True)
+
+    def bootstrap_single_symbol(self, sym, token):
+        """Fetches historical candles for a single symbol to initialize indicators."""
+        from datetime import timedelta
+        
+        # Initialize deques in memory
+        self.candles_1m[sym] = deque(maxlen=300)
+        self.candles_5m[sym] = deque(maxlen=300)
+        self.candles_15m[sym] = deque(maxlen=300)
+        self.candles_day[sym] = deque(maxlen=50)
+        self.adr_cache[sym] = {"pct": 0.0, "abs": 0.0}
+        
+        today = datetime.now()
+        day_from = today - timedelta(days=50)
+        m5_from = today - timedelta(days=8)
+        m15_from = today - timedelta(days=20)
+        m1_from = today - timedelta(days=3)
+
+        # 1. Daily for ADR
+        try:
+            daily_data = self.kite.historical_data(
+                instrument_token=token,
+                from_date=day_from.date(),
+                to_date=today.date(),
+                interval="day"
+            )
+            self.candles_day[sym].extend(daily_data)
+            adr_pct, adr_abs = TechnicalIndicators.calculate_adr(list(self.candles_day[sym]))
+            self.adr_cache[sym] = {"pct": adr_pct, "abs": adr_abs}
+        except Exception as e:
+            self.log_message(f"Failed fetching daily candles for {sym}: {e}", is_error=True)
+
+        # 2. 1m
+        try:
+            m1_data = self.kite.historical_data(
+                instrument_token=token,
+                from_date=m1_from,
+                to_date=today,
+                interval="minute"
+            )
+            self.candles_1m[sym].extend(m1_data)
+        except Exception as e:
+            self.log_message(f"Failed fetching 1m candles for {sym}: {e}", is_error=True)
+
+        # 3. 5m
+        try:
+            m5_data = self.kite.historical_data(
+                instrument_token=token,
+                from_date=m5_from,
+                to_date=today,
+                interval="5minute"
+            )
+            self.candles_5m[sym].extend(m5_data)
+        except Exception as e:
+            self.log_message(f"Failed fetching 5m candles for {sym}: {e}", is_error=True)
+
+        # 4. 15m
+        try:
+            m15_data = self.kite.historical_data(
+                instrument_token=token,
+                from_date=m15_from,
+                to_date=today,
+                interval="15minute"
+            )
+            self.candles_15m[sym].extend(m15_data)
+        except Exception as e:
+            self.log_message(f"Failed fetching 15m candles for {sym}: {e}", is_error=True)
+            
+        # Recalculate indicators once
+        self.recalculate_all_indicators_for_symbol(sym)
+

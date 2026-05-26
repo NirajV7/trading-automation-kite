@@ -78,7 +78,9 @@ class StrategyEvaluatorMixin:
 
         orb = self.orb_ranges.get(symbol)
         if not orb:
-            return
+            orb = self.establish_single_orb_range(symbol)
+            if not orb:
+                return
             
         high_boundary = orb["high"]
         low_boundary = orb["low"]

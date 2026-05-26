@@ -58,3 +58,45 @@ class ORBManagerMixin:
         except Exception as e:
             self.log_message(f"Critical error establishing ORB: {e}", is_error=True)
             handle_auth_failure(e)
+
+    def establish_single_orb_range(self, symbol):
+        """Fetches historical ORB boundaries for a single symbol dynamically."""
+        if self.dry_run:
+            self.orb_ranges[symbol] = {"high": 1000.0, "low": 980.0}
+            return self.orb_ranges[symbol]
+
+        try:
+            self.kite = get_kite_client()
+            token = self.symbol_to_token.get(symbol)
+            if not token:
+                # Reload mappings cache in case new mappings are added
+                self.load_symbol_mappings()
+                token = self.symbol_to_token.get(symbol)
+                if not token:
+                    self.log_message(f"Error: Token not found for {symbol} to establish ORB.", is_error=True)
+                    return None
+
+            today = datetime.now()
+            from_time = datetime.combine(today.date(), datetime_time(9, 15, 0))
+            to_time = datetime.combine(today.date(), datetime_time(15, 30, 0))
+            
+            candles = self.kite.historical_data(
+                instrument_token=token,
+                from_date=from_time,
+                to_date=to_time,
+                interval="15minute"
+            )
+            if candles:
+                for c in candles:
+                    c_dt = c["date"]
+                    if c_dt.hour == 9 and c_dt.minute == 15:
+                        self.orb_ranges[symbol] = {
+                            "high": float(c["high"]),
+                            "low": float(c["low"])
+                        }
+                        self.log_message(f"ORB: Dynamically established range for {symbol} -> High: {c['high']}, Low: {c['low']}")
+                        return self.orb_ranges[symbol]
+        except Exception as e:
+            self.log_message(f"Failed to dynamically establish ORB for {symbol}: {e}", is_error=True)
+            handle_auth_failure(e)
+        return None

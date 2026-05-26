@@ -25,6 +25,9 @@ def run_data_logger():
     # Start periodic file writer thread
     threading.Thread(target=logger.write_live_state_to_file, daemon=True).start()
     
+    # Start watchlist monitor background thread
+    logger.start_watchlist_monitor()
+    
     # Read access token and API Key for Ticker
     try:
         with open(KITE_TOKEN_FILE, "r") as f:
@@ -53,8 +56,19 @@ def run_data_logger():
             pass
 
     def on_connect(ws, response):
-        logger.log_message("Kite WebSocket connected! Subscribing to Nifty 50 tokens...")
-        tokens = list(logger.symbol_to_token.values())
+        from config import NIFTY_50_TICKERS
+        logger.log_message("Kite WebSocket connected! Resolving initial subscription tokens...")
+        
+        # Subscribe to Nifty 50
+        tokens = [logger.symbol_to_token[s] for s in NIFTY_50_TICKERS if s in logger.symbol_to_token]
+        # Also subscribe to active watchlist symbols at boot
+        wl_symbols = logger.get_current_watchlist_symbols()
+        for sym in wl_symbols:
+            if sym in logger.symbol_to_token:
+                tok = logger.symbol_to_token[sym]
+                if tok not in tokens:
+                    tokens.append(tok)
+                    
         ws.subscribe(tokens)
         ws.set_mode(ws.MODE_FULL, tokens)
         logger.log_message(f"Subscribed to {len(tokens)} tokens in FULL mode.")
