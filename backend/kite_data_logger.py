@@ -226,6 +226,13 @@ class KiteDataLogger:
             vwap_15m = TechnicalIndicators.calculate_vwap(c15m)
             rsi_15m = TechnicalIndicators.calculate_rsi(closes_15m, 14)
 
+            # Volume baseline calculations (average volume of the last 20 closed candles)
+            volumes_15m = [c["volume"] for c in c15m[-20:]]
+            avg_vol_15m = sum(volumes_15m) / len(volumes_15m) if volumes_15m else 0.0
+            
+            volumes_5m = [c["volume"] for c in c5m[-20:]]
+            avg_vol_5m = sum(volumes_5m) / len(volumes_5m) if volumes_5m else 0.0
+
             # Populate latest indicators in live_state
             if sym not in self.live_state:
                 self.live_state[sym] = {}
@@ -234,6 +241,8 @@ class KiteDataLogger:
                 "symbol": sym,
                 "adr_percentage": round(self.adr_cache[sym]["pct"], 2),
                 "adr_absolute": round(self.adr_cache[sym]["abs"], 2),
+                "avg_vol_15m": avg_vol_15m,
+                "avg_vol_5m": avg_vol_5m,
                 
                 # 1m
                 "ema20_1m": ema20_1m[-1] if ema20_1m else None,
@@ -285,10 +294,21 @@ class KiteDataLogger:
             # Update immediate live details
             if sym not in self.live_state:
                 self.live_state[sym] = {"symbol": sym}
+            
+            # Extract daily ohlc and volume metrics from tick
+            today_open = ohlc.get("open")
+            today_high = ohlc.get("high")
+            today_low = ohlc.get("low")
+            
             self.live_state[sym].update({
                 "ltp": ltp,
                 "change": round(pct_change, 2),
                 "volume": vol_traded,
+                "today_open": today_open if today_open else self.live_state[sym].get("today_open"),
+                "today_high": today_high if today_high else self.live_state[sym].get("today_high"),
+                "today_low": today_low if today_low else self.live_state[sym].get("today_low"),
+                "buy_quantity": tick.get("buy_quantity", 0.0),
+                "sell_quantity": tick.get("sell_quantity", 0.0)
             })
             
             # Aggregate candles for 1m, 5m, and 15m
@@ -382,6 +402,7 @@ class KiteDataLogger:
                 f"ema200{pfx}": ema200,
                 f"vwap{pfx}": vwap,
                 f"rsi{pfx}": rsi,
+                f"active_vol{pfx}": active["volume"],
                 "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
 

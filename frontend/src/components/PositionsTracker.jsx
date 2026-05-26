@@ -1,9 +1,126 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+
+function InlineNumericUpdater({ value, onChange, tickSize, themeClass }) {
+  const [inputValue, setInputValue] = useState(value !== null && value !== undefined ? value.toFixed(2) : '');
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Sync state if value prop changes from parent
+  useEffect(() => {
+    if (value !== null && value !== undefined) {
+      setInputValue(value.toFixed(2));
+    } else {
+      setInputValue('');
+    }
+  }, [value]);
+
+  const step = tickSize || 0.05;
+
+  const handleSave = async (valStr) => {
+    const val = parseFloat(valStr);
+    if (isNaN(val) || val <= 0) {
+      // Revert to parent value
+      setInputValue(value !== null && value !== undefined ? value.toFixed(2) : '');
+      return;
+    }
+
+    // Round properly to tick size
+    const rounded = Math.round(val / step) * step;
+    if (rounded === value) {
+      setInputValue(rounded.toFixed(2));
+      return; // No change
+    }
+
+    setIsSaving(true);
+    try {
+      const res = await onChange(rounded);
+      if (res && res.status === 'error') {
+        alert(`Failed to update: ${res.message}`);
+        setInputValue(value !== null && value !== undefined ? value.toFixed(2) : '');
+      } else {
+        setInputValue(rounded.toFixed(2));
+      }
+    } catch (e) {
+      console.error(e);
+      setInputValue(value !== null && value !== undefined ? value.toFixed(2) : '');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.target.blur();
+    } else if (e.key === 'Escape') {
+      setInputValue(value !== null && value !== undefined ? value.toFixed(2) : '');
+      e.target.blur();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const current = parseFloat(inputValue) || value || 0;
+      const nextVal = (current + step);
+      setInputValue(nextVal.toFixed(2));
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const current = parseFloat(inputValue) || value || 0;
+      const nextVal = Math.max(0, current - step);
+      setInputValue(nextVal.toFixed(2));
+    }
+  };
+
+  const handleArrowClick = (direction) => {
+    const current = parseFloat(inputValue) || value || 0;
+    const nextVal = direction === 'up' 
+      ? (current + step) 
+      : Math.max(0, current - step);
+    const rounded = Math.round(nextVal / step) * step;
+    setInputValue(rounded.toFixed(2));
+    handleSave(rounded.toFixed(2));
+  };
+
+  return (
+    <div className={`numeric-updater-container ${themeClass}`} style={{ opacity: isSaving ? 0.7 : 1 }}>
+      {isSaving && (
+        <div className="numeric-updater-loading-container">
+          <div className="numeric-updater-spinner" />
+        </div>
+      )}
+      <input
+        type="number"
+        className="numeric-updater-input"
+        style={{ paddingLeft: isSaving ? '20px' : '6px' }}
+        value={inputValue}
+        step={step}
+        onChange={(e) => setInputValue(e.target.value)}
+        onBlur={() => handleSave(inputValue)}
+        onKeyDown={handleKeyDown}
+        disabled={isSaving}
+      />
+      <div className="numeric-updater-buttons">
+        <button 
+          className="numeric-updater-btn" 
+          onClick={() => handleArrowClick('up')}
+          disabled={isSaving}
+          title={`Increase by ${step}`}
+        >
+          ▲
+        </button>
+        <button 
+          className="numeric-updater-btn" 
+          onClick={() => handleArrowClick('down')}
+          disabled={isSaving}
+          title={`Decrease by ${step}`}
+        >
+          ▼
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function PositionsTracker({
   positions,
   onSelectSymbol,
   onModifyStopLoss,
+  onModifyTarget,
   onScaleOut,
   onExit
 }) {
@@ -133,37 +250,37 @@ export default function PositionsTracker({
                     
                     {/* SL / Target Status */}
                     <td>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.72rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.72rem' }}>
                         {/* Stop Loss order linked */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                          <span style={{ color: 'var(--color-text-muted)' }}>SL:</span>
-                          {p.sl_price ? (
-                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-crimson)', fontWeight: 600 }}>
-                              ₹{p.sl_price.toFixed(2)}
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--color-gold)', fontSize: '0.9em', fontWeight: 600 }}>
-                              ⚠️ GHOST SL
-                            </span>
-                          )}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                          <span style={{ color: 'var(--color-text-muted)', minWidth: '24px' }}>SL:</span>
+                          <InlineNumericUpdater
+                            value={p.sl_price || p.engine_sl}
+                            tickSize={p.tick_size}
+                            themeClass={p.sl_price ? "sl-theme" : "ghost-theme"}
+                            onChange={(newVal) => onModifyStopLoss(
+                              p.symbol,
+                              newVal,
+                              p.sl_order_id,
+                              p.quantity,
+                              p.product
+                            )}
+                          />
                         </div>
                         
                         {/* Target Limit order linked */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                          <span style={{ color: 'var(--color-text-muted)' }}>TGT:</span>
-                          {p.target_price ? (
-                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-emerald)', fontWeight: 600 }}>
-                              ₹{p.target_price.toFixed(2)}
-                            </span>
-                          ) : p.engine_target ? (
-                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-cyan)', fontWeight: 600 }} title="Virtual Target Managed by Daemon">
-                              ₹{p.engine_target.toFixed(2)} (VT)
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--color-gold)', fontSize: '0.9em', fontWeight: 600 }}>
-                              ⚠️ GHOST LIMIT
-                            </span>
-                          )}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                          <span style={{ color: 'var(--color-text-muted)', minWidth: '24px' }}>TGT:</span>
+                          <InlineNumericUpdater
+                            value={p.target_price || p.engine_target}
+                            tickSize={p.tick_size}
+                            themeClass={p.target_price ? "tgt-theme" : (p.engine_target ? "tgt-vt-theme" : "ghost-theme")}
+                            onChange={(newVal) => onModifyTarget(
+                              p.symbol,
+                              newVal,
+                              p.target_order_id
+                            )}
+                          />
                         </div>
                       </div>
                     </td>
@@ -208,13 +325,6 @@ export default function PositionsTracker({
                     {/* Action Buttons */}
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
-                        <button 
-                          onClick={() => onModifyStopLoss(p)} 
-                          className="btn btn-cyan" 
-                          style={{ padding: '4px 8px', fontSize: '0.7rem' }}
-                        >
-                          MOD SL
-                        </button>
                         <button 
                           onClick={() => onScaleOut(p.symbol)} 
                           className="btn btn-emerald" 

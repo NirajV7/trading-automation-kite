@@ -188,6 +188,20 @@ export default function App() {
     }
   };
 
+  const forceRefresh = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/system/force_refresh`, { method: 'POST' });
+      const data = await res.json();
+      console.log('[Force Refresh]', data.message);
+    } catch (e) {
+      console.error('Force refresh failed', e);
+    }
+    fetchStatus();
+    fetchPositions();
+    fetchOrders();
+    fetchWatchlistData();
+  };
+
   const exitPosition = async (symbol) => {
     if (!confirm(`Exit position for ${symbol}?`)) return;
     try {
@@ -216,33 +230,46 @@ export default function App() {
     }
   };
 
-  const modifyStopLoss = async (pos) => {
-    const defaultPrice = pos.sl_price || pos.average_price;
-    const newSL = prompt(`Enter new Stop Loss price for ${pos.symbol}:`, defaultPrice);
-    if (newSL === null || isNaN(newSL)) return;
-
+  const modifyStopLoss = async (symbol, newSL, slOrderId, quantity, product) => {
     try {
       const res = await fetch(`${API_URL}/api/kite/modify_sl`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          symbol: pos.symbol,
+          symbol,
           new_sl_price: parseFloat(newSL),
-          sl_order_id: pos.sl_order_id,
-          quantity: pos.quantity,
-          transaction_type: pos.quantity > 0 ? "SELL" : "BUY",
-          product: pos.product
+          sl_order_id: slOrderId || null,
+          quantity,
+          transaction_type: quantity > 0 ? "SELL" : "BUY",
+          product
         })
       });
       const data = await res.json();
-      if (data.status === 'success') {
-        alert(`Stop Loss successfully updated to ₹${data.new_sl}`);
-      } else {
-        alert(`Error: ${data.message}`);
-      }
       fetchPositions();
+      return data;
     } catch (e) {
-      alert("Failed to modify stop loss.");
+      console.error("Failed to modify stop loss", e);
+      return { status: 'error', message: e.message || 'Network error' };
+    }
+  };
+
+  const modifyTarget = async (symbol, newTarget, targetOrderId) => {
+    try {
+      const res = await fetch(`${API_URL}/api/kite/modify_target`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol,
+          new_target_price: parseFloat(newTarget),
+          target_order_id: targetOrderId || null
+        })
+      });
+      const data = await res.json();
+      fetchPositions();
+      return data;
+    } catch (e) {
+      console.error("Failed to modify target", e);
+      return { status: 'error', message: e.message || 'Network error' };
     }
   };
 
@@ -379,6 +406,11 @@ export default function App() {
               KITE CONNECT SECURE
             </span>
           )}
+
+          {/* Force Refresh — busts caches and restarts dead logger */}
+          <button onClick={forceRefresh} className="btn btn-cyan" style={{ padding: '6px 12px', fontSize: '0.75rem' }}>
+            🔄 REFRESH
+          </button>
 
           {/* Global Emergency Panic Switch */}
           <button onClick={triggerPanic} className="btn btn-panic" style={{ padding: '6px 16px', fontSize: '0.8rem' }}>
@@ -532,6 +564,7 @@ export default function App() {
               positions={positions}
               onSelectSymbol={selectChartSymbol}
               onModifyStopLoss={modifyStopLoss}
+              onModifyTarget={modifyTarget}
               onScaleOut={scaleOutPosition}
               onExit={exitPosition}
             />
