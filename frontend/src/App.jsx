@@ -6,6 +6,7 @@ import TechnicalChart from './components/TechnicalChart';
 import PositionsTracker from './components/PositionsTracker';
 import TelemetryLog from './components/TelemetryLog';
 import OrderBook from './components/OrderBook';
+import RadarCandidates from './components/RadarCandidates';
 
 const API_URL = "http://127.0.0.1:8080";
 
@@ -21,7 +22,7 @@ try {
 
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState('radar'); // 'radar', 'positions', 'system'
+  const [activeTab, setActiveTab] = useState('radar'); // 'radar', 'spikes', 'chart', 'positions', 'system'
 
   // Master app states
   const [status, setStatus] = useState({
@@ -34,6 +35,7 @@ export default function App() {
   });
   const [engineMode, setEngineMode] = useState("dry"); // "dry" or "live"
   const [watchlistData, setWatchlistData] = useState([]);
+  const [radarCandidates, setRadarCandidates] = useState([]);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
   const [logOutput, setLogOutput] = useState("Connecting to FastAPI daemon...");
@@ -104,16 +106,29 @@ export default function App() {
     }
   };
 
+  // Fetch radar candidates
+  const fetchRadarCandidates = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/radar/candidates`);
+      const data = await res.json();
+      setRadarCandidates(data.candidates || []);
+    } catch (e) {
+      console.debug("Failed fetching radar candidates", e);
+    }
+  };
+
   // Initial sync & polling
   useEffect(() => {
     fetchStatus();
     fetchWatchlistData();
+    fetchRadarCandidates();
     fetchPositions();
     fetchOrders();
     fetchLogs();
 
     const intervalStatus = setInterval(fetchStatus, 5000);
     const intervalWatchlist = setInterval(fetchWatchlistData, 2000);
+    const intervalRadar = setInterval(fetchRadarCandidates, 2000);
     const intervalPositions = setInterval(fetchPositions, 1500);
     const intervalOrders = setInterval(fetchOrders, 2000);
     const intervalLogs = setInterval(fetchLogs, 3000);
@@ -121,6 +136,7 @@ export default function App() {
     return () => {
       clearInterval(intervalStatus);
       clearInterval(intervalWatchlist);
+      clearInterval(intervalRadar);
       clearInterval(intervalPositions);
       clearInterval(intervalOrders);
       clearInterval(intervalLogs);
@@ -451,6 +467,30 @@ export default function App() {
           📡 Watchlist Radar
         </button>
         <button 
+          onClick={() => setActiveTab('spikes')}
+          style={{
+            background: activeTab === 'spikes' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'spikes' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'spikes' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'spikes' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          ⚡ Spike Radar
+        </button>
+        <button 
           onClick={() => setActiveTab('chart')}
           style={{
             background: activeTab === 'chart' ? 'var(--bg-panel)' : 'transparent',
@@ -537,6 +577,13 @@ export default function App() {
               onAddToWatchlist={addToWatchlist}
               apiUrl={API_URL}
             />
+          </main>
+        )}
+
+        {/* Tab 1b: Spike Radar candidates */}
+        {activeTab === 'spikes' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
+            <RadarCandidates candidates={radarCandidates} />
           </main>
         )}
 

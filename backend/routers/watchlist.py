@@ -200,3 +200,84 @@ def get_history(symbol: str, interval: str = "5minute", days: int = 5):
         return JSONResponse({"status": "success", "data": formatted_data})
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@router.get("/api/radar/candidates")
+def get_radar_candidates():
+    """
+    Returns persistent active radar candidates enriched with live indicators and ORB ranges.
+    """
+    import os
+    import json
+    import config
+
+    candidates = {}
+    if os.path.exists(config.RADAR_CANDIDATES_FILE):
+        try:
+            with open(config.RADAR_CANDIDATES_FILE, "r") as f:
+                candidates = json.load(f)
+        except Exception:
+            pass
+
+    # Load live telemetry snapshot
+    market_snapshot = {}
+    if os.path.exists(config.LIVE_MARKET_DATA_FILE):
+        try:
+            with open(config.LIVE_MARKET_DATA_FILE, "r") as f:
+                market_snapshot = json.load(f)
+        except Exception:
+            pass
+
+    from orb_manager import ORBManagerMixin
+    class QuickORB(ORBManagerMixin):
+        def __init__(self):
+            self.orb_ranges = {}
+            self.symbol_to_token = {}
+            if os.path.exists(config.INSTRUMENT_MAPPING_FILE):
+                try:
+                    with open(config.INSTRUMENT_MAPPING_FILE, "r") as f:
+                        mapping = json.load(f)
+                        self.symbol_to_token = {k: int(v) for k, v in mapping.get("symbol_to_token", {}).items()}
+                except Exception:
+                    pass
+        def log_message(self, msg, is_error=False):
+            pass
+    
+    orb_loader = QuickORB()
+
+    enriched_candidates = []
+    for symbol, cand in candidates.items():
+        ticker_data = market_snapshot.get(symbol, {})
+        
+        orb_high = None
+        orb_low = None
+        try:
+            orb = orb_loader.establish_single_orb_range(symbol)
+            if orb:
+                orb_high = orb["high"]
+                orb_low = orb["low"]
+        except Exception:
+            pass
+
+        enriched_candidates.append({
+            "symbol": symbol,
+            "state": cand.get("state"),
+            "direction": cand.get("direction"),
+            "spike_price": cand.get("spike_price"),
+            "spike_open": cand.get("spike_open"),
+            "spike_time": cand.get("spike_time"),
+            "lowest_pullback_low": cand.get("lowest_pullback_low"),
+            "highest_pullback_high": cand.get("highest_pullback_high"),
+            
+            # Telemetry
+            "ltp": ticker_data.get("ltp"),
+            "ema20_5m": ticker_data.get("ema20_5m"),
+            "prev_high_5m": ticker_data.get("prev_high_5m"),
+            "prev_low_5m": ticker_data.get("prev_low_5m"),
+            "vwap_5m": ticker_data.get("vwap_5m"),
+            "orb_high": orb_high,
+            "orb_low": orb_low
+        })
+
+    return JSONResponse({"status": "success", "candidates": enriched_candidates})
+
