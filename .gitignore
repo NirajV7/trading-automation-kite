@@ -117,3 +117,13 @@ pykiteconnect/
 node_modules/
 frontend/node_modules/
 
+# Launcher scripts
+start_terminal.sh
+run_terminal.applescript
+
+# Chat logs and docs
+chat/session.md
+chat/home_laptop_setup.md
+
+# Stock list CSVs
+Stocks/

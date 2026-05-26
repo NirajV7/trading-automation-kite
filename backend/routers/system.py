@@ -13,7 +13,7 @@ import config
 from kite_auth_manager import check_kite_auth
 from kite_telemetry import get_kite_margin, get_kite_orders, get_kite_positions
 from kite_utils import get_public_ip
-from routers.shared import is_process_running, get_python_executable
+from routers.shared import is_process_running, get_python_executable, set_logger_enabled, kill_process_by_name, get_process_command_lines
 
 router = APIRouter()
 
@@ -32,16 +32,12 @@ def api_status():
     
     # Check if execution core is running
     engine_state = "stopped"
-    if is_process_running("kite_execution_core.py"):
-        # We look at process args to distinguish live vs dry-run
+    command_lines = get_process_command_lines("kite_execution_core.py")
+    if command_lines:
         # Check if "live" string is present in process arguments
-        try:
-            pgrep_output = subprocess.check_output("ps aux | grep kite_execution_core.py | grep -v grep", shell=True).decode()
-            if "live" in pgrep_output.lower():
-                engine_state = "live"
-            else:
-                engine_state = "dry"
-        except Exception:
+        if any("live" in cmd.lower() for cmd in command_lines):
+            engine_state = "live"
+        else:
             engine_state = "dry"
 
     # Zerodha Auth checks
@@ -92,6 +88,7 @@ def start_logger():
     """
     Launches the Zerodha Kite Data Logger process in the background.
     """
+    set_logger_enabled(True)
     if is_process_running("run_data_logger.py"):
         return JSONResponse({"status": "error", "message": "Data Logger is already running."})
         
@@ -113,10 +110,11 @@ def stop_logger():
     """
     Terminates the background Kite Data Logger process.
     """
+    set_logger_enabled(False)
     if not is_process_running("run_data_logger.py"):
         return JSONResponse({"status": "error", "message": "Data Logger is already stopped."})
         
-    subprocess.run("pkill -f run_data_logger.py", shell=True)
+    kill_process_by_name("run_data_logger.py")
     return JSONResponse({"status": "success", "message": "Kite Data Logger engine stopped."})
 
 
@@ -148,6 +146,7 @@ def force_refresh():
     logger_restarted = False
     if not is_process_running("run_data_logger.py"):
         try:
+            set_logger_enabled(True)
             venv_py = get_python_executable()
             script_path = os.path.join(config.BACKEND_DIR, "run_data_logger.py")
             with open(config.ENGINE_LOG, "a") as log_file:
@@ -216,7 +215,7 @@ def stop_engine():
     if not is_process_running("kite_execution_core.py"):
         return JSONResponse({"status": "error", "message": "Kite Execution Core is already stopped."})
         
-    subprocess.run("pkill -f kite_execution_core.py", shell=True)
+    kill_process_by_name("kite_execution_core.py")
     return JSONResponse({"status": "success", "message": "Kite Execution Core stopped."})
 
 
@@ -253,8 +252,9 @@ def stop_all():
     """
     Convenience method to stop all trading engines.
     """
-    p1 = subprocess.run("pkill -f run_data_logger.py", shell=True)
-    p2 = subprocess.run("pkill -f kite_execution_core.py", shell=True)
+    set_logger_enabled(False)
+    kill_process_by_name("run_data_logger.py")
+    kill_process_by_name("kite_execution_core.py")
     return JSONResponse({
         "status": "success",
         "message": "All background processes terminated successfully."

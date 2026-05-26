@@ -15,7 +15,7 @@ import config
 from kite_auth_manager import check_kite_auth, get_kite_client
 from kite_order_manager import modify_or_place_sl, exit_single_position
 from kite_utils import round_to_tick
-from routers.shared import is_process_running, load_local_trades, save_local_trades
+from routers.shared import is_process_running, load_local_trades, save_local_trades, is_logger_enabled
 
 
 def run_always_on_safety_guardian():
@@ -38,8 +38,8 @@ def run_always_on_safety_guardian():
             # Check auth first
             needs_login, _ = check_kite_auth()
             if not needs_login:
-                # 1. Self-healing: Ensure logger is running
-                if not is_process_running("run_data_logger.py"):
+                # 1. Self-healing: Ensure logger is running if enabled
+                if is_logger_enabled() and not is_process_running("run_data_logger.py"):
                     print("🛡️ [Safety Guardian] Data Logger not running. Auto-recovering logger process...")
                     try:
                         start_logger()
@@ -67,12 +67,15 @@ def run_always_on_safety_guardian():
                             }
                             
                     local_trades = load_local_trades()
-                    updated_trades = {}
+                    
+                    # Build set of symbols with active positions on Zerodha
+                    broker_active_symbols = set()
                     
                     for p in positions:
                         qty = int(p.get("quantity", 0))
                         if qty != 0:
                             symbol = p.get("tradingsymbol")
+                            broker_active_symbols.add(symbol)
                             product = p.get("product", "MIS")
                             avg_price = float(p.get("average_price", 0.0))
                             if avg_price <= 0:
@@ -112,8 +115,9 @@ def run_always_on_safety_guardian():
                             sl_width = abs(avg_price - sl_price)
                             target_price = round_to_tick(avg_price + 2.0 * sl_width) if direction == "BUY" else round_to_tick(avg_price - 2.0 * sl_width)
                             
+                            # MERGE into local_trades — preserve engine-set values (target, strategy, entry_time)
                             existing_trade = local_trades.get(symbol, {})
-                            updated_trades[symbol] = {
+                            local_trades[symbol] = {
                                 "entry": existing_trade.get("entry", avg_price),
                                 "qty": abs(qty),
                                 "direction": direction,
@@ -124,8 +128,26 @@ def run_always_on_safety_guardian():
                                 "entry_time": existing_trade.get("entry_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                             }
                     
-                    # Sync back local trades configuration
-                    save_local_trades(updated_trades)
+                    # Remove local entries ONLY if confirmed closed on broker (not pending fill)
+                    for sym in list(local_trades.keys()):
+                        if sym not in broker_active_symbols:
+                            # Protect recent entries — order might still be matching on Zerodha
+                            entry_time_str = local_trades[sym].get("entry_time", "")
+                            try:
+                                entry_dt = datetime.strptime(entry_time_str, "%Y-%m-%d %H:%M:%S")
+                                age_seconds = (datetime.now() - entry_dt).total_seconds()
+                                if age_seconds > 30:
+                                    print(f"🛡️ [Safety Guardian] Removing {sym} — confirmed closed on Zerodha (age: {age_seconds:.0f}s)")
+                                    del local_trades[sym]
+                                else:
+                                    print(f"🛡️ [Safety Guardian] Keeping {sym} (age: {age_seconds:.0f}s) — may be pending fill")
+                            except (ValueError, TypeError):
+                                # Can't parse entry_time — assume closed
+                                print(f"🛡️ [Safety Guardian] Removing {sym} — not on Zerodha, unparseable entry_time")
+                                del local_trades[sym]
+                    
+                    # Save merged result
+                    save_local_trades(local_trades)
 
                 # 3. Fast Loop: Evaluate virtual target breaches (every 1 second)
                 if os.path.exists(config.LIVE_MARKET_DATA_FILE):

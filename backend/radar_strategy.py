@@ -41,9 +41,8 @@ class RadarStrategyMixin:
         3. Volume Contraction & ORB/SpikeOpen/VWAP Invalidation
         4. Resumption Trigger (Cross prev closed 5m High/Low)
         """
-        # Block if already active in standard trades or max core positions reached
-        if symbol in self.active_trades or len(self.active_trades) >= 3:
-            # If we are already holding, clean up candidate to release state tracking
+        # If we are already holding this symbol, clean up candidate to release state tracking
+        if symbol in self.active_trades:
             if symbol in self.radar_candidates:
                 del self.radar_candidates[symbol]
                 self.save_radar_candidates()
@@ -60,6 +59,9 @@ class RadarStrategyMixin:
         # Phase 1: Detection (The Spike)
         # -------------------------------------------------------------
         if symbol not in self.radar_candidates:
+            if len(self.active_trades) >= 3:
+                return  # Block new detections if max positions reached
+
             prev_open_1m = metrics.get("prev_open_1m")
             prev_close_1m = metrics.get("prev_close_1m")
             prev_volume_1m = metrics.get("prev_volume_1m")
@@ -106,6 +108,64 @@ class RadarStrategyMixin:
         # Retrieve required 5m indicators
         ema20_5m = metrics.get("ema20_5m")
 
+        # 1. Closed 5m Invalidation Checks (Runs once when 5m candle boundary updates)
+        # Evaluated for both WAITING_FOR_PULLBACK and IN_PULLBACK states
+        last_closed_5m_time = metrics.get("last_closed_5m_time")
+        stored_closed_5m_time = cand.get("last_closed_5m_time")
+
+        if last_closed_5m_time is not None and last_closed_5m_time != stored_closed_5m_time:
+            cand["last_closed_5m_time"] = last_closed_5m_time
+            
+            prev_volume_5m = metrics.get("prev_volume_5m")
+            if prev_volume_5m is None:
+                prev_volume_5m = 0.0
+            avg_vol_5m = metrics.get("avg_vol_5m", 0.0)
+            prev_close_5m = metrics.get("prev_close_5m")
+            vwap_5m = metrics.get("vwap_5m")
+
+            # Validation A: Volume Drying Check (pullback 5m volume must be < 0.8x average)
+            if avg_vol_5m > 0:
+                vol_limit = avg_vol_5m * 0.8
+                if prev_volume_5m >= vol_limit:
+                    self.log_message(
+                        f"❌ [RADAR] {symbol} Setup Invalidated: Pullback volume did not dry "
+                        f"(Pullback Vol: {prev_volume_5m} >= limit: {vol_limit:.0f})"
+                    )
+                    del self.radar_candidates[symbol]
+                    self.save_radar_candidates()
+                    return
+
+            # Validation B: Technical Levels Invalidation Check
+            # Fetch 15m ORB range from memory (requires establish_single_orb_range fallback)
+            orb = self.orb_ranges.get(symbol)
+            if not orb:
+                orb = self.establish_single_orb_range(symbol)
+
+            if orb and prev_close_5m is not None:
+                spike_open = cand["spike_open"]
+                
+                if direction == "BUY":
+                    orb_high = orb["high"]
+                    if prev_close_5m < orb_high or prev_close_5m < spike_open or (vwap_5m is not None and prev_close_5m < vwap_5m):
+                        self.log_message(
+                            f"❌ [RADAR] {symbol} Setup Invalidated: 5m Close {prev_close_5m:.2f} broke below "
+                            f"ORB High: {orb_high:.2f}, Spike Open: {spike_open:.2f}, or VWAP: {vwap_5m}"
+                        )
+                        del self.radar_candidates[symbol]
+                        self.save_radar_candidates()
+                        return
+                else: # SELL setup
+                    orb_low = orb["low"]
+                    if prev_close_5m > orb_low or prev_close_5m > spike_open or (vwap_5m is not None and prev_close_5m > vwap_5m):
+                        self.log_message(
+                            f"❌ [RADAR] {symbol} Setup Invalidated: 5m Close {prev_close_5m:.2f} broke above "
+                            f"ORB Low: {orb_low:.2f}, Spike Open: {spike_open:.2f}, or VWAP: {vwap_5m}"
+                        )
+                        del self.radar_candidates[symbol]
+                        self.save_radar_candidates()
+                        return
+            self.save_radar_candidates()
+
         # -------------------------------------------------------------
         # state: WAITING_FOR_PULLBACK -> Checks EMA20 zone touch
         # -------------------------------------------------------------
@@ -124,67 +184,19 @@ class RadarStrategyMixin:
         # state: IN_PULLBACK -> Evaluates closed 5m filters and trigger
         # -------------------------------------------------------------
         elif state == "IN_PULLBACK":
-            # 1. Closed 5m Invalidation Checks (Runs once when 5m candle boundary updates)
-            last_closed_5m_time = metrics.get("last_closed_5m_time")
-            stored_closed_5m_time = cand.get("last_closed_5m_time")
-
-            if last_closed_5m_time is not None and last_closed_5m_time != stored_closed_5m_time:
-                cand["last_closed_5m_time"] = last_closed_5m_time
-                
-                prev_volume_5m = metrics.get("prev_volume_5m", 0.0)
-                avg_vol_5m = metrics.get("avg_vol_5m", 0.0)
-                prev_close_5m = metrics.get("prev_close_5m")
-                vwap_5m = metrics.get("vwap_5m")
-
-                # Validation A: Volume Drying Check (pullback 5m volume must be < 0.8x average)
-                if avg_vol_5m > 0:
-                    vol_limit = avg_vol_5m * 0.8
-                    if prev_volume_5m >= vol_limit:
-                        self.log_message(
-                            f"❌ [RADAR] {symbol} Setup Invalidated: Pullback volume did not dry "
-                            f"(Pullback Vol: {prev_volume_5m} >= limit: {vol_limit:.0f})"
-                        )
-                        del self.radar_candidates[symbol]
-                        self.save_radar_candidates()
-                        return
-
-                # Validation B: Technical Levels Invalidation Check
-                # Fetch 15m ORB range from memory (requires establish_single_orb_range fallback)
-                orb = self.orb_ranges.get(symbol)
-                if not orb:
-                    orb = self.establish_single_orb_range(symbol)
-
-                if orb and prev_close_5m is not None:
-                    spike_open = cand["spike_open"]
-                    
-                    if direction == "BUY":
-                        orb_high = orb["high"]
-                        if prev_close_5m < orb_high or prev_close_5m < spike_open or (vwap_5m is not None and prev_close_5m < vwap_5m):
-                            self.log_message(
-                                f"❌ [RADAR] {symbol} Setup Invalidated: 5m Close {prev_close_5m:.2f} broke below "
-                                f"ORB High: {orb_high:.2f}, Spike Open: {spike_open:.2f}, or VWAP: {vwap_5m}"
-                            )
-                            del self.radar_candidates[symbol]
-                            self.save_radar_candidates()
-                            return
-                    else: # SELL setup
-                        orb_low = orb["low"]
-                        if prev_close_5m > orb_low or prev_close_5m > spike_open or (vwap_5m is not None and prev_close_5m > vwap_5m):
-                            self.log_message(
-                                f"❌ [RADAR] {symbol} Setup Invalidated: 5m Close {prev_close_5m:.2f} broke above "
-                                f"ORB Low: {orb_low:.2f}, Spike Open: {spike_open:.2f}, or VWAP: {vwap_5m}"
-                            )
-                            del self.radar_candidates[symbol]
-                            self.save_radar_candidates()
-                            return
-                self.save_radar_candidates()
-
             # 2. Tick-by-tick trigger check
             prev_high_5m = metrics.get("prev_high_5m")
             prev_low_5m = metrics.get("prev_low_5m")
 
             if direction == "BUY" and prev_high_5m is not None:
                 if ltp > prev_high_5m:
+                    # Apply final core position limits before entry
+                    if len(self.active_trades) >= 3:
+                        self.log_message(f"⚠️ [RADAR] Trigger condition met for {symbol} but max positions (3) reached. Skipping entry.")
+                        del self.radar_candidates[symbol]
+                        self.save_radar_candidates()
+                        return
+
                     # Trigger entry!
                     sl = cand["lowest_pullback_low"]
                     # If SL low matches or is above trigger price due to noise, enforce a tight 1.5% fallback
@@ -208,6 +220,13 @@ class RadarStrategyMixin:
 
             elif direction == "SELL" and prev_low_5m is not None:
                 if ltp < prev_low_5m:
+                    # Apply final core position limits before entry
+                    if len(self.active_trades) >= 3:
+                        self.log_message(f"⚠️ [RADAR] Trigger condition met for {symbol} but max positions (3) reached. Skipping entry.")
+                        del self.radar_candidates[symbol]
+                        self.save_radar_candidates()
+                        return
+
                     # Trigger entry!
                     sl = cand["highest_pullback_high"]
                     if sl <= ltp:

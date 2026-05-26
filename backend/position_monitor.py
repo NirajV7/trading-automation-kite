@@ -17,7 +17,9 @@ class PositionMonitorMixin:
         sl_hit = (direction == "BUY" and ltp <= sl) or (direction == "SELL" and ltp >= sl)
         
         # Trail Stop Loss to break-even if >= 70% of ADR expansion is achieved
-        adr_absolute = metrics.get("adr_absolute", 0.0) if metrics else 0.0
+        adr_absolute = metrics.get("adr_absolute") if metrics else 0.0
+        if adr_absolute is None:
+            adr_absolute = 0.0
         already_trailed = trade.get("already_trailed", False)
         if not already_trailed and adr_absolute > 0:
             entry = trade["entry"]
@@ -56,9 +58,27 @@ class PositionMonitorMixin:
             if self.dry_run:
                 self.close_active_trade_record(symbol, sl, "Stop Loss Hit (Simulated)")
             else:
-                # Live fallback exit triggered manually if trigger slips
-                try:
-                    exit_single_position(symbol)
+                # Check if Zerodha's SL order already triggered — if yes, skip manual exit to prevent double sell
+                sl_id = trade.get("sl_id")
+                sl_already_fired = False
+                if sl_id:
+                    try:
+                        orders = self.kite.orders()
+                        for o in orders:
+                            if o.get("order_id") == sl_id and o.get("status") in ["COMPLETE", "CANCELLED", "REJECTED"]:
+                                sl_already_fired = True
+                                break
+                    except Exception:
+                        pass
+
+                if sl_already_fired:
+                    # SL order already executed on Zerodha — just clean up local state, no manual exit needed
+                    self.log_message(f"SL order {sl_id} already fired on Zerodha for {symbol}. Skipping manual exit.")
                     self.close_active_trade_record(symbol, ltp, "Stop Loss Hit (Live)")
-                except Exception as e:
-                    self.log_message(f"Live exit routing failed during SL breach for {symbol}: {e}", is_error=True)
+                else:
+                    # SL order hasn't triggered yet (slipped) — fire manual fallback exit
+                    try:
+                        exit_single_position(symbol)
+                        self.close_active_trade_record(symbol, ltp, "Stop Loss Hit (Live)")
+                    except Exception as e:
+                        self.log_message(f"Live exit routing failed during SL breach for {symbol}: {e}", is_error=True)

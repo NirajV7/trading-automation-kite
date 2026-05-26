@@ -231,8 +231,12 @@ def get_radar_candidates():
     from orb_manager import ORBManagerMixin
     class QuickORB(ORBManagerMixin):
         def __init__(self):
+            self.dry_run = False
             self.orb_ranges = {}
             self.symbol_to_token = {}
+            self.load_symbol_mappings()
+
+        def load_symbol_mappings(self):
             if os.path.exists(config.INSTRUMENT_MAPPING_FILE):
                 try:
                     with open(config.INSTRUMENT_MAPPING_FILE, "r") as f:
@@ -240,6 +244,7 @@ def get_radar_candidates():
                         self.symbol_to_token = {k: int(v) for k, v in mapping.get("symbol_to_token", {}).items()}
                 except Exception:
                     pass
+
         def log_message(self, msg, is_error=False):
             pass
     

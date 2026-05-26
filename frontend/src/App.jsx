@@ -8,7 +8,7 @@ import TelemetryLog from './components/TelemetryLog';
 import OrderBook from './components/OrderBook';
 import RadarCandidates from './components/RadarCandidates';
 
-const API_URL = "http://127.0.0.1:8080";
+const API_URL = "http://100.117.188.86:8080";
 
 // Safely resolve Electron ipcRenderer if available
 let ipcRenderer = null;

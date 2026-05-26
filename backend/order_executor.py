@@ -70,7 +70,8 @@ class OrderExecutorMixin:
                 transaction_type=direction,
                 quantity=qty,
                 product="MIS",
-                order_type="MARKET"
+                order_type="MARKET",
+                market_protection=-1
             )
             
             # Retrieve average fill price (wait briefly for matching engine execution)
