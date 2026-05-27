@@ -112,20 +112,23 @@ export default function OrderBook({ orders, onSelectSymbol, onCancelOrder, onMod
   const activeOrdersList = activeSubTab === 'pending' ? pendingOrders : executedOrders;
 
   return (
-    <div className="glass-panel" style={{ marginTop: '20px' }}>
-      <div className="panel-header" style={{ marginBottom: '10px' }}>
-        <span>Zerodha Orderbook</span>
+    <div className="glass-panel risk-table-panel orderbook-panel">
+      <div className="risk-panel-header">
+        <div>
+          <h2>Zerodha Orderbook</h2>
+          <p>Pending and executed orders with quick modify/cancel controls.</p>
+        </div>
         
         {/* Sub-tabs selector */}
-        <div className="orderbook-subtabs">
+        <div className="risk-subtabs">
           <button 
-            className={`pill-btn ${activeSubTab === 'pending' ? 'active' : ''}`}
+            className={activeSubTab === 'pending' ? 'active' : ''}
             onClick={() => setActiveSubTab('pending')}
           >
             Pending ({pendingOrders.length})
           </button>
           <button 
-            className={`pill-btn ${activeSubTab === 'executed' ? 'active' : ''}`}
+            className={activeSubTab === 'executed' ? 'active' : ''}
             onClick={() => setActiveSubTab('executed')}
           >
             Executed ({executedOrders.length})
@@ -133,8 +136,8 @@ export default function OrderBook({ orders, onSelectSymbol, onCancelOrder, onMod
         </div>
       </div>
       
-      <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-        <table className="custom-table">
+      <div className="risk-table-wrap orderbook-table-wrap">
+        <table className="custom-table risk-data-table">
           <thead>
             <tr>
               <th>Order ID</th>
@@ -155,7 +158,10 @@ export default function OrderBook({ orders, onSelectSymbol, onCancelOrder, onMod
                   colSpan={activeSubTab === 'pending' ? 9 : 8} 
                   style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '20px' }}
                 >
-                  No {activeSubTab} orders found.
+                  <div className="risk-empty-state">
+                    <strong>No {activeSubTab} orders</strong>
+                    <span>{activeSubTab === 'pending' ? 'Open and trigger-pending orders will appear here.' : 'Completed, cancelled, and rejected orders will appear here.'}</span>
+                  </div>
                 </td>
               </tr>
             ) : (

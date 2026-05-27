@@ -42,6 +42,14 @@ export default function App() {
   const [selectedSymbol, setSelectedSymbol] = useState("RELIANCE");
   const [chartInterval, setChartInterval] = useState("5minute");
 
+  // Operation Loading States
+  const [loggerLoading, setLoggerLoading] = useState(false);
+  const [loggerAction, setLoggerAction] = useState(null);
+  const [engineLoading, setEngineLoading] = useState(false);
+  const [refreshLoading, setRefreshLoading] = useState(false);
+  const [panicLoading, setPanicLoading] = useState(false);
+  const [shutdownLoading, setShutdownLoading] = useState(false);
+
   // Fetch status
   const fetchStatus = async () => {
     try {
@@ -160,62 +168,95 @@ export default function App() {
   // Operations
   const toggleLogger = async () => {
     const action = status.data_logger === 'active' ? 'stop_logger' : 'start_logger';
+    setLoggerAction(action === 'stop_logger' ? 'stop' : 'start');
+    setLoggerLoading(true);
     try {
-      await fetch(`${API_URL}/api/system/${action}`, { method: 'POST' });
-      fetchStatus();
+      const res = await fetch(`${API_URL}/api/system/${action}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'error') {
+        alert(`❌ Logger Error: ${data.message}`);
+      }
+      // Delay to let process initialization or failure settle
+      await new Promise(r => setTimeout(r, 1000));
+      await fetchStatus();
     } catch (e) {
-      console.error(e);
+      alert(`❌ Failed to toggle data logger: ${e.message}`);
+    } finally {
+      setLoggerLoading(false);
+      setLoggerAction(null);
     }
   };
 
   const toggleEngine = async () => {
     const action = status.kite_engine !== 'stopped' ? 'stop_engine' : 'start_engine';
     const body = action === 'start_engine' ? JSON.stringify({ mode: engineMode }) : undefined;
+    setEngineLoading(true);
     try {
-      await fetch(`${API_URL}/api/system/${action}`, {
+      const res = await fetch(`${API_URL}/api/system/${action}`, {
         method: 'POST',
         headers: body ? { 'Content-Type': 'application/json' } : {},
         body
       });
-      fetchStatus();
+      const data = await res.json();
+      if (data.status === 'error') {
+        alert(`❌ Engine Error: ${data.message}`);
+      }
+      // Delay to let process initialization or failure settle
+      await new Promise(r => setTimeout(r, 1000));
+      await fetchStatus();
     } catch (e) {
-      console.error(e);
+      alert(`❌ Failed to toggle execution engine: ${e.message}`);
+    } finally {
+      setEngineLoading(false);
     }
   };
 
   const stopAll = async () => {
+    if (!confirm("🛑 Shutdown all running backend services?")) return;
+    setShutdownLoading(true);
     try {
-      await fetch(`${API_URL}/api/system/stop_all`, { method: 'POST' });
-      fetchStatus();
+      const res = await fetch(`${API_URL}/api/system/stop_all`, { method: 'POST' });
+      const data = await res.json();
+      alert(`🛑 ${data.message}`);
+      await fetchStatus();
     } catch (e) {
-      console.error(e);
+      alert(`❌ Shutdown command failed: ${e.message}`);
+    } finally {
+      setShutdownLoading(false);
     }
   };
 
   const triggerPanic = async () => {
     if (!confirm("⚠️ PANIC EXIT: Cancel all orders & square off all positions?")) return;
+    setPanicLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/kite/panic`, { method: 'POST' });
       const data = await res.json();
       alert(data.message);
-      fetchPositions();
+      await fetchPositions();
     } catch (e) {
       alert("Panic shutdown failed.");
+    } finally {
+      setPanicLoading(false);
     }
   };
 
   const forceRefresh = async () => {
+    setRefreshLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/system/force_refresh`, { method: 'POST' });
       const data = await res.json();
       console.log('[Force Refresh]', data.message);
     } catch (e) {
-      console.error('Force refresh failed', e);
+      alert(`❌ Force Refresh failed: ${e.message}`);
+    } finally {
+      // Re-fetch status/telemetry immediately
+      await fetchStatus();
+      await fetchPositions();
+      await fetchOrders();
+      await fetchWatchlistData();
+      setRefreshLoading(false);
     }
-    fetchStatus();
-    fetchPositions();
-    fetchOrders();
-    fetchWatchlistData();
   };
 
   const exitPosition = async (symbol) => {
@@ -398,13 +439,14 @@ export default function App() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-darkest)' }}>
+    <div className="app-shell" style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-darkest)' }}>
       {/* 1. Header Toolbar */}
       <header className="app-header">
         <div className="header-title">
-          <span>🛡️</span> KITE QUANT TERMINAL
+          <span className="brand-mark">🛡️</span>
+          <span className="brand-name">KITE QUANT TERMINAL</span>
           {status.network && status.network.is_whitelisted && (
-            <span style={{ fontSize: '0.6em', background: 'rgba(0, 229, 255, 0.12)', color: 'var(--color-cyan)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(0, 229, 255, 0.3)' }}>
+            <span className="tailscale-pill" style={{ fontSize: '0.6em', background: 'rgba(0, 229, 255, 0.12)', color: 'var(--color-cyan)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(0, 229, 255, 0.3)' }}>
               TS SECURE
             </span>
           )}
@@ -413,35 +455,49 @@ export default function App() {
         <div className="header-status">
           {/* Zerodha Authentication Banner */}
           {status.kite_needs_login ? (
-            <a href={status.kite_auth_url} target="_blank" className="btn btn-crimson" style={{ textDecoration: 'none' }}>
+            <a href={status.kite_auth_url} target="_blank" className="btn btn-crimson top-action-button" style={{ textDecoration: 'none' }}>
               ⚠️ AUTHENTICATE ZERODHA
             </a>
           ) : (
-            <span style={{ color: 'var(--color-emerald)', fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ width: '8px', height: '8px', background: 'var(--color-emerald)', borderRadius: '50%' }}></span>
+            <span className="kite-status-pill" style={{ color: 'var(--color-emerald)', fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span className="status-dot-live" style={{ width: '8px', height: '8px', background: 'var(--color-emerald)', borderRadius: '50%' }}></span>
               KITE CONNECT SECURE
             </span>
           )}
 
           {/* Force Refresh — busts caches and restarts dead logger */}
-          <button onClick={forceRefresh} className="btn btn-cyan" style={{ padding: '6px 12px', fontSize: '0.75rem' }}>
-            🔄 REFRESH
+          <button 
+            onClick={forceRefresh} 
+            className="btn btn-cyan top-action-button" 
+            style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+            disabled={refreshLoading || loggerLoading || engineLoading || panicLoading || shutdownLoading}
+          >
+            {refreshLoading ? <span className="btn-spinner"></span> : '🔄'} REFRESH
           </button>
 
           {/* Global Emergency Panic Switch */}
-          <button onClick={triggerPanic} className="btn btn-panic" style={{ padding: '6px 16px', fontSize: '0.8rem' }}>
-            ⚠️ PANIC EXIT
+          <button 
+            onClick={triggerPanic} 
+            className="btn btn-panic top-action-button top-panic-button" 
+            style={{ padding: '6px 16px', fontSize: '0.8rem' }}
+            disabled={panicLoading || refreshLoading || loggerLoading || engineLoading || shutdownLoading}
+          >
+            {panicLoading ? <span className="btn-spinner"></span> : '⚠️'} PANIC EXIT
           </button>
 
           {/* System Global Shutdown Controls */}
-          <button onClick={stopAll} className="btn btn-crimson">
-            🛑 SHUTDOWN ALL
+          <button 
+            onClick={stopAll} 
+            className="btn btn-crimson top-action-button"
+            disabled={shutdownLoading || refreshLoading || loggerLoading || engineLoading || panicLoading}
+          >
+            {shutdownLoading ? <span className="btn-spinner"></span> : '🛑'} SHUTDOWN ALL
           </button>
         </div>
       </header>
 
       {/* 2. Chrome-like tab bar navigation */}
-      <div className="chrome-tabs" style={{ display: 'flex', gap: '4px', background: 'var(--bg-darker)', borderBottom: '1px solid var(--border-color)', padding: '0 20px', height: '40px', alignItems: 'flex-end', WebkitAppRegion: 'no-drag' }}>
+      <div className="chrome-tabs app-nav-tabs" style={{ display: 'flex', gap: '4px', background: 'var(--bg-darker)', borderBottom: '1px solid var(--border-color)', padding: '0 20px', height: '40px', alignItems: 'flex-end', WebkitAppRegion: 'no-drag' }}>
         <button 
           onClick={() => setActiveTab('radar')}
           style={{
@@ -589,11 +645,12 @@ export default function App() {
 
         {/* Tab 2: Technical Chart */}
         {activeTab === 'chart' && (
-          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
+          <main className="main-workspace" style={{ height: 'calc(100vh - 112px)', overflowY: 'hidden', display: 'flex', flexDirection: 'column', padding: '24px' }}>
             <TechnicalChart 
               selectedSymbol={selectedSymbol}
               chartInterval={chartInterval}
               onChangeInterval={setChartInterval}
+              onSelectSymbol={setSelectedSymbol}
               apiUrl={API_URL}
               watchlistData={watchlistData}
             />
@@ -626,15 +683,16 @@ export default function App() {
 
         {/* Tab 4: System Operations */}
         {activeTab === 'system' && (
-          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto', display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px' }}>
+          <main className="main-workspace system-workspace" style={{ height: '100%', overflowY: 'auto' }}>
             <EngineControls 
               status={status}
               engineMode={engineMode}
               setEngineMode={setEngineMode}
               onToggleLogger={toggleLogger}
               onToggleEngine={toggleEngine}
-              onAddToWatchlist={addToWatchlist}
-              apiUrl={API_URL}
+              loggerLoading={loggerLoading}
+              loggerAction={loggerAction}
+              engineLoading={engineLoading}
             />
             <TelemetryLog logOutput={logOutput} />
           </main>

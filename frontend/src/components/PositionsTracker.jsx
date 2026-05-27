@@ -130,42 +130,23 @@ export default function PositionsTracker({
   const closedPositions = positions.filter(p => p.quantity === 0);
 
   return (
-    <div className="glass-panel">
+    <div className="glass-panel risk-table-panel positions-panel">
       {/* Panel Header with Sub-Tabs */}
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Active Zerodha Brackets & Risk Engine</span>
-        <div style={{ display: 'flex', gap: '6px', background: 'rgba(0, 0, 0, 0.2)', padding: '3px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+      <div className="risk-panel-header">
+        <div>
+          <h2>Active Zerodha Brackets</h2>
+          <p>Live position risk, SL/target controls, ADR exhaustion, and exit actions.</p>
+        </div>
+        <div className="risk-subtabs">
           <button 
             onClick={() => setSubTab('active')}
-            style={{
-              background: subTab === 'active' ? 'rgba(0, 229, 255, 0.15)' : 'transparent',
-              color: subTab === 'active' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
-              border: '1px solid ' + (subTab === 'active' ? 'rgba(0, 229, 255, 0.3)' : 'transparent'),
-              padding: '4px 12px',
-              fontSize: '0.75rem',
-              fontWeight: 600,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              outline: 'none'
-            }}
+            className={subTab === 'active' ? 'active' : ''}
           >
             Active ({activePositions.length})
           </button>
           <button 
             onClick={() => setSubTab('closed')}
-            style={{
-              background: subTab === 'closed' ? 'rgba(0, 229, 255, 0.15)' : 'transparent',
-              color: subTab === 'closed' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
-              border: '1px solid ' + (subTab === 'closed' ? 'rgba(0, 229, 255, 0.3)' : 'transparent'),
-              padding: '4px 12px',
-              fontSize: '0.75rem',
-              fontWeight: 600,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              outline: 'none'
-            }}
+            className={subTab === 'closed' ? 'active' : ''}
           >
             Closed ({closedPositions.length})
           </button>
@@ -173,7 +154,8 @@ export default function PositionsTracker({
       </div>
 
       {subTab === 'active' ? (
-        <table className="custom-table">
+        <div className="risk-table-wrap">
+        <table className="custom-table risk-data-table">
           <thead>
             <tr>
               <th>Symbol</th>
@@ -191,7 +173,10 @@ export default function PositionsTracker({
             {activePositions.length === 0 ? (
               <tr>
                 <td colSpan="9" style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '20px' }}>
-                  No active Zerodha positions discovered.
+                  <div className="risk-empty-state">
+                    <strong>No active Zerodha positions</strong>
+                    <span>Risk engine is armed. New live/manual positions will appear here.</span>
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -347,8 +332,10 @@ export default function PositionsTracker({
             )}
           </tbody>
         </table>
+        </div>
       ) : (
-        <table className="custom-table">
+        <div className="risk-table-wrap">
+        <table className="custom-table risk-data-table">
           <thead>
             <tr>
               <th>Symbol</th>
@@ -361,7 +348,10 @@ export default function PositionsTracker({
             {closedPositions.length === 0 ? (
               <tr>
                 <td colSpan="4" style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: '20px' }}>
-                  No closed trades logged today.
+                  <div className="risk-empty-state">
+                    <strong>No closed trades today</strong>
+                    <span>Completed positions will show realized P&L here.</span>
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -400,6 +390,7 @@ export default function PositionsTracker({
             )}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
