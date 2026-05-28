@@ -1,13 +1,89 @@
 import os
+import time
 
 # pyrefly: ignore [missing-import]
 from kiteconnect import KiteConnect
 
 # Import auth and utils modules
 from kite_auth_manager import get_kite_client
-from kite_utils import round_to_tick, handle_auth_failure
+from kite_utils import round_to_tick, get_tick_size, handle_auth_failure
 
-def place_marketable_limit_exit(kite, exchange, symbol, tx_type, quantity, product, last_price=None):
+OPEN_ORDER_STATUSES = {"OPEN", "TRIGGER PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED", "OPEN PENDING"}
+FAILED_ORDER_STATUSES = {"REJECTED", "CANCELLED"}
+
+
+def get_buffered_sl_prices(trigger_price, transaction_type):
+    """Returns rounded trigger and buffered SL-limit price for the exit direction."""
+    trigger = round_to_tick(trigger_price)
+    tick_size = get_tick_size(trigger)
+    buffer_value = max(2 * tick_size, trigger * 0.0015)
+
+    if transaction_type == "SELL":
+        raw_limit = trigger - buffer_value
+        limit_price = round_to_tick(raw_limit, tick_size)
+        if limit_price >= trigger:
+            limit_price = round_to_tick(trigger - tick_size, tick_size)
+    else:
+        raw_limit = trigger + buffer_value
+        limit_price = round_to_tick(raw_limit, tick_size)
+        if limit_price <= trigger:
+            limit_price = round_to_tick(trigger + tick_size, tick_size)
+
+    return trigger, limit_price
+
+
+def get_latest_order_state(kite, order_id):
+    """Fetches latest order state from order_history first, then orderbook fallback."""
+    try:
+        history = kite.order_history(order_id)
+        if history:
+            return history[-1]
+    except Exception:
+        pass
+
+    try:
+        for order in kite.orders():
+            if order.get("order_id") == order_id:
+                return order
+    except Exception:
+        pass
+    return None
+
+
+def wait_for_order_completion(kite, order_id, timeout=10.0, poll_interval=0.5):
+    """Waits for a Kite order to reach COMPLETE or a terminal failed state."""
+    deadline = time.time() + timeout
+    last_state = None
+    while time.time() < deadline:
+        last_state = get_latest_order_state(kite, order_id)
+        status = (last_state or {}).get("status")
+        if status == "COMPLETE":
+            return {"status": "complete", "order": last_state}
+        if status in FAILED_ORDER_STATUSES:
+            return {"status": "failed", "order": last_state}
+        time.sleep(poll_interval)
+    return {"status": "timeout", "order": last_state}
+
+
+def get_net_position(kite, symbol):
+    positions = kite.positions()
+    for p in positions.get("net", []):
+        if p.get("tradingsymbol") == symbol:
+            return p
+    return None
+
+
+def wait_until_position_flat(kite, symbol, timeout=10.0, poll_interval=0.5):
+    deadline = time.time() + timeout
+    last_pos = None
+    while time.time() < deadline:
+        last_pos = get_net_position(kite, symbol)
+        if not last_pos or int(last_pos.get("quantity", 0)) == 0:
+            return True
+        time.sleep(poll_interval)
+    return False
+
+def place_marketable_limit_exit(kite, exchange, symbol, tx_type, quantity, product, last_price=None, tag=None):
     """
     Submits a marketable LIMIT order to square off a position immediately.
     Uses a 0.5% protective buffer over the last price (LTP) to ensure instant matching
@@ -28,16 +104,19 @@ def place_marketable_limit_exit(kite, exchange, symbol, tx_type, quantity, produ
         else:
             limit_price = round_to_tick(last_price * 1.005)
 
-        return kite.place_order(
-            variety="regular",
-            exchange=exchange,
-            tradingsymbol=symbol,
-            transaction_type=tx_type,
-            quantity=quantity,
-            product=product,
-            order_type="LIMIT",
-            price=limit_price
-        )
+        params = {
+            "variety": "regular",
+            "exchange": exchange,
+            "tradingsymbol": symbol,
+            "transaction_type": tx_type,
+            "quantity": quantity,
+            "product": product,
+            "order_type": "LIMIT",
+            "price": limit_price
+        }
+        if tag:
+            params["tag"] = tag
+        return kite.place_order(**params)
     except Exception as e:
         print(f"⚠️ [MARKETABLE LIMIT EXIT] Failed for {symbol}: {e}")
         raise
@@ -49,8 +128,16 @@ def modify_or_place_sl(symbol, new_trigger_price, sl_order_id=None, quantity=Non
     """
     try:
         kite = get_kite_client()
-        rounded_price = round_to_tick(new_trigger_price)
-        limit_price = rounded_price
+        if not transaction_type and sl_order_id:
+            try:
+                order_state = get_latest_order_state(kite, sl_order_id)
+                transaction_type = order_state.get("transaction_type") if order_state else None
+            except Exception:
+                pass
+        if not transaction_type:
+            return {"status": "error", "message": "Missing transaction_type for SL buffer calculation"}
+
+        rounded_price, limit_price = get_buffered_sl_prices(new_trigger_price, transaction_type)
         
         if sl_order_id:
             # Modify existing stop loss order
@@ -62,7 +149,7 @@ def modify_or_place_sl(symbol, new_trigger_price, sl_order_id=None, quantity=Non
                 price=limit_price
             )
             print(f"✅ [SL MODIFY] {symbol}: SL moved to ₹{rounded_price} (limit ₹{limit_price})")
-            return {"status": "success", "message": f"SL modified to ₹{rounded_price}", "new_sl": rounded_price}
+            return {"status": "success", "message": f"SL modified to ₹{rounded_price}", "new_sl": rounded_price, "limit_price": limit_price}
         else:
             # Check mandatory fields for placement
             if not quantity or not transaction_type or not product:
@@ -77,10 +164,11 @@ def modify_or_place_sl(symbol, new_trigger_price, sl_order_id=None, quantity=Non
                 product=product,
                 order_type="SL",
                 trigger_price=rounded_price,
-                price=limit_price
+                price=limit_price,
+                tag=f"KQT_SL_{symbol}"[:20]
             )
             print(f"✅ [SL PLACED] {symbol}: New SL at ₹{rounded_price} (limit ₹{limit_price})")
-            return {"status": "success", "message": f"New SL placed at ₹{rounded_price}", "new_sl": rounded_price, "order_id": order_id}
+            return {"status": "success", "message": f"New SL placed at ₹{rounded_price}", "new_sl": rounded_price, "limit_price": limit_price, "order_id": order_id}
             
     except Exception as e:
         print(f"❌ [SL ERROR] {symbol}: {e}")
@@ -129,9 +217,13 @@ def panic_square_off():
                     exit_qty = abs(qty)
                     
                     try:
-                        place_marketable_limit_exit(kite, exchange, symbol, tx_type, exit_qty, product,
-                                                    last_price=p.get("last_price", 0.0))
-                        summary["squared_positions"] += 1
+                        order_id = place_marketable_limit_exit(kite, exchange, symbol, tx_type, exit_qty, product,
+                                                               last_price=p.get("last_price", 0.0), tag=f"KQT_EXIT_{symbol}"[:20])
+                        res = wait_for_order_completion(kite, order_id)
+                        if res["status"] == "complete" or wait_until_position_flat(kite, symbol, timeout=3.0):
+                            summary["squared_positions"] += 1
+                        else:
+                            summary["errors"].append(f"Square off {symbol} not confirmed: {res['status']}")
                     except Exception as e:
                         summary["errors"].append(f"Square off {symbol} failed: {e}")
         except Exception as e:
@@ -186,13 +278,16 @@ def exit_single_position(symbol):
                     tx_type = "SELL" if qty > 0 else "BUY"
                     exit_qty = abs(qty)
                     
-                    place_marketable_limit_exit(kite, exchange, symbol, tx_type, exit_qty, product,
-                                                last_price=p.get("last_price", 0.0))
-                    squared = True
+                    order_id = place_marketable_limit_exit(kite, exchange, symbol, tx_type, exit_qty, product,
+                                                           last_price=p.get("last_price", 0.0), tag=f"KQT_EXIT_{symbol}"[:20])
+                    res = wait_for_order_completion(kite, order_id)
+                    squared = res["status"] == "complete" or wait_until_position_flat(kite, symbol, timeout=3.0)
+                    if not squared:
+                        return {"status": "error", "message": f"Exit order {order_id} for {symbol} not confirmed: {res['status']}"}
                     break
         
         return {
-            "status": "success",
+            "status": "success" if squared else "error",
             "message": f"Exit completed for {symbol}. Orders cancelled: {cancelled}, Position squared: {squared}"
         }
     except Exception as e:
@@ -232,8 +327,11 @@ def book_half_position(symbol):
         exit_tx_type = "SELL" if qty > 0 else "BUY"
         
         # 2. Square off 50% of the position
-        place_marketable_limit_exit(kite, exchange, symbol, exit_tx_type, half_qty, product,
-                                    last_price=target_pos.get("last_price", 0.0))
+        exit_order_id = place_marketable_limit_exit(kite, exchange, symbol, exit_tx_type, half_qty, product,
+                                                    last_price=target_pos.get("last_price", 0.0), tag=f"KQT_SCALE_{symbol}"[:20])
+        exit_res = wait_for_order_completion(kite, exit_order_id)
+        if exit_res["status"] != "complete":
+            return {"status": "error", "message": f"Scale-out order {exit_order_id} not confirmed: {exit_res['status']}"}
         
         refactored_orders = []
         cancelled_orders = 0
@@ -259,7 +357,10 @@ def book_half_position(symbol):
                     if o.get("tradingsymbol") == symbol and o.get("status") in open_statuses:
                         if o.get("transaction_type") == exit_tx_type:
                             otype = o.get("order_type")
-                            if otype in ["SL", "SL-M", "LIMIT"]:
+                            if otype == "LIMIT":
+                                kite.cancel_order(variety=o.get("variety", "regular"), order_id=o.get("order_id"))
+                                cancelled_orders += 1
+                            elif otype in ["SL", "SL-M"]:
                                 mod_params = {
                                     "variety": o.get("variety", "regular"),
                                     "order_id": o.get("order_id"),

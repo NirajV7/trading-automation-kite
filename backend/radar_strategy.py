@@ -2,8 +2,12 @@ import os
 import json
 import time
 from datetime import datetime
+from datetime import time as datetime_time
 import config
 from kite_utils import round_to_tick
+from risk_governor import can_open_trade
+from symbol_cooldowns import get_active_cooldown
+from trade_journal import append_event
 
 class RadarStrategyMixin:
     def load_radar_candidates(self):
@@ -41,6 +45,10 @@ class RadarStrategyMixin:
         3. Volume Contraction & ORB/SpikeOpen/VWAP Invalidation
         4. Resumption Trigger (Cross prev closed 5m High/Low)
         """
+        now_time = datetime.now().time()
+        if now_time < datetime_time(9, 30, 0) or now_time >= datetime_time(15, 0, 0):
+            return
+
         # If we are already holding this symbol, clean up candidate to release state tracking
         if symbol in self.active_trades:
             if symbol in self.radar_candidates:
@@ -49,7 +57,9 @@ class RadarStrategyMixin:
             return
 
         # Block if cooldown timer is active
-        if symbol in self.cooldowns and time.time() < self.cooldowns[symbol]:
+        cooldown = get_active_cooldown(symbol)
+        if cooldown:
+            append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="RADAR", state="BLOCKED", reason=f"Cooldown active: {cooldown.get('reason')}", source="cooldown")
             if symbol in self.radar_candidates:
                 del self.radar_candidates[symbol]
                 self.save_radar_candidates()
@@ -59,8 +69,11 @@ class RadarStrategyMixin:
         # Phase 1: Detection (The Spike)
         # -------------------------------------------------------------
         if symbol not in self.radar_candidates:
-            if len(self.active_trades) >= 3:
-                return  # Block new detections if max positions reached
+            governor_gate = can_open_trade(symbol, "RADAR", active_trades=self.active_trades)
+            if not governor_gate.get("allowed"):
+                append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="RADAR", state="BLOCKED", reason=governor_gate.get("message"), source="risk_governor")
+                self.log_gate_failure(symbol, "risk_governor_radar", f"Risk Governor blocked radar detection for {symbol}: {governor_gate.get('message')}")
+                return
 
             prev_open_1m = metrics.get("prev_open_1m")
             prev_close_1m = metrics.get("prev_close_1m")
@@ -191,8 +204,10 @@ class RadarStrategyMixin:
             if direction == "BUY" and prev_high_5m is not None:
                 if ltp > prev_high_5m:
                     # Apply final core position limits before entry
-                    if len(self.active_trades) >= 3:
-                        self.log_message(f"⚠️ [RADAR] Trigger condition met for {symbol} but max positions (3) reached. Skipping entry.")
+                    governor_gate = can_open_trade(symbol, "RADAR", active_trades=self.active_trades)
+                    if not governor_gate.get("allowed"):
+                        append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="RADAR", direction="BUY", state="BLOCKED", price=ltp, reason=governor_gate.get("message"), source="risk_governor")
+                        self.log_message(f"⚠️ [RADAR] Trigger condition met for {symbol} but Risk Governor blocked entry: {governor_gate.get('message')}")
                         del self.radar_candidates[symbol]
                         self.save_radar_candidates()
                         return
@@ -221,8 +236,10 @@ class RadarStrategyMixin:
             elif direction == "SELL" and prev_low_5m is not None:
                 if ltp < prev_low_5m:
                     # Apply final core position limits before entry
-                    if len(self.active_trades) >= 3:
-                        self.log_message(f"⚠️ [RADAR] Trigger condition met for {symbol} but max positions (3) reached. Skipping entry.")
+                    governor_gate = can_open_trade(symbol, "RADAR", active_trades=self.active_trades)
+                    if not governor_gate.get("allowed"):
+                        append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="RADAR", direction="SELL", state="BLOCKED", price=ltp, reason=governor_gate.get("message"), source="risk_governor")
+                        self.log_message(f"⚠️ [RADAR] Trigger condition met for {symbol} but Risk Governor blocked entry: {governor_gate.get('message')}")
                         del self.radar_candidates[symbol]
                         self.save_radar_candidates()
                         return

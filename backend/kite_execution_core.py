@@ -8,7 +8,6 @@ from config import (
     RISK_PER_TRADE,
     CAPITAL_ALLOCATION,
     ACTIVE_TRADES_FILE,
-    TRADE_JOURNAL_CSV,
     ENGINE_LOG,
     INSTRUMENT_MAPPING_FILE,
     LIVE_MARKET_DATA_FILE
@@ -23,6 +22,7 @@ from strategy_evaluator import StrategyEvaluatorMixin
 from position_monitor import PositionMonitorMixin
 from reconciler import ReconcilerMixin
 from radar_strategy import RadarStrategyMixin
+from symbol_cooldowns import get_active_cooldowns
 
 # -------------------------------------------------------------
 # STUB: Notifications (Telegram removed — log only)
@@ -61,14 +61,19 @@ class KiteExecutionCore(
         
         # Local state storage
         self.active_trades = {}  # {SYMBOL: {entry_price, qty, direction, sl, target, sl_id, target_id, strategy}}
-        self.cooldowns = {}       # {SYMBOL: cooldown_end_timestamp}
+        self.cooldowns = {}       # {SYMBOL: cooldown metadata loaded from symbol_cooldowns.json}
         self.orb_ranges = {}      # {SYMBOL: {"high": value, "low": value}}
         self.radar_candidates = {} # {SYMBOL: candidate_details}
         
         # Load existing active trades and radar candidates from disk
         self.load_active_trades()
+        self.refresh_cooldowns()
         self.load_radar_candidates()
         self.log_message(f"Execution Core initialized. Mode: {'DRY RUN' if dry_run else 'LIVE'}")
+
+    def refresh_cooldowns(self):
+        self.cooldowns = get_active_cooldowns()
+        return self.cooldowns
 
     def log_message(self, msg, is_error=False):
         """Appends logs atomically to backend/logs/engine.log."""

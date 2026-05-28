@@ -340,8 +340,8 @@ class KiteDataLogger:
                 "today_open": today_open if today_open else self.live_state[sym].get("today_open"),
                 "today_high": today_high if today_high else self.live_state[sym].get("today_high"),
                 "today_low": today_low if today_low else self.live_state[sym].get("today_low"),
-                "buy_quantity": tick.get("buy_quantity", 0.0),
-                "sell_quantity": tick.get("sell_quantity", 0.0)
+                "buy_quantity": tick.get("total_buy_quantity", tick.get("buy_quantity", 0.0)),
+                "sell_quantity": tick.get("total_sell_quantity", tick.get("sell_quantity", 0.0))
             })
             
             # Aggregate candles for 1m, 5m, and 15m
@@ -585,4 +585,3 @@ class KiteDataLogger:
             
         # Recalculate indicators once
         self.recalculate_all_indicators_for_symbol(sym)
-

@@ -310,7 +310,7 @@ async def execute_modify_target(request: Request):
         except Exception as e:
             print(f"❌ [API modify_target] Failed to write to active_trades: {e}")
             
-    # 2. Modify Zerodha limit order if target_order_id was passed or can be found
+    # 2. Targets are virtual now. Cancel any stale exchange-side target LIMIT order.
     kite = None
     try:
         from kite_auth_manager import check_kite_auth, get_kite_client
@@ -322,29 +322,21 @@ async def execute_modify_target(request: Request):
         
     if kite:
         try:
-            if not target_order_id:
-                orders = kite.orders()
-                open_statuses = ["OPEN", "TRIGGER PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED"]
-                for o in orders:
-                    if o.get("tradingsymbol") == symbol and o.get("status") in open_statuses:
-                        if o.get("order_type") == "LIMIT":
-                            target_order_id = o.get("order_id")
-                            break
-                            
-            if target_order_id:
-                kite.modify_order(
-                    variety="regular",
-                    order_id=target_order_id,
-                    order_type="LIMIT",
-                    price=rounded_target
-                )
-                print(f"✅ [Target ZERODHA MODIFY] {symbol}: Target order modified to ₹{rounded_target}")
-                return JSONResponse({"status": "success", "message": f"Target modified on Zerodha to ₹{rounded_target}", "new_target": rounded_target})
+            orders = kite.orders()
+            open_statuses = ["OPEN", "TRIGGER PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED"]
+            cancelled = 0
+            for o in orders:
+                if o.get("tradingsymbol") == symbol and o.get("status") in open_statuses:
+                    if o.get("order_type") == "LIMIT" and (not target_order_id or o.get("order_id") == target_order_id):
+                        kite.cancel_order(variety=o.get("variety", "regular"), order_id=o.get("order_id"))
+                        cancelled += 1
+            if cancelled:
+                print(f"✅ [Target VIRTUAL] {symbol}: Cancelled {cancelled} stale target LIMIT order(s)")
         except Exception as e:
-            print(f"⚠️ [Target ZERODHA MODIFY ERROR] {symbol}: {e}")
+            print(f"⚠️ [Target VIRTUAL CLEANUP ERROR] {symbol}: {e}")
             return JSONResponse({
                 "status": "partial", 
-                "message": f"Updated locally to ₹{rounded_target}, but Zerodha order modification failed: {str(e)}", 
+                "message": f"Updated locally to ₹{rounded_target}, but stale target cleanup failed: {str(e)}",
                 "new_target": rounded_target
             })
             

@@ -7,6 +7,9 @@ import PositionsTracker from './components/PositionsTracker';
 import TelemetryLog from './components/TelemetryLog';
 import OrderBook from './components/OrderBook';
 import RadarCandidates from './components/RadarCandidates';
+import KillSwitchPanel from './components/KillSwitchPanel';
+import TradeJournalPanel from './components/TradeJournalPanel';
+import StrategyHealthPanel from './components/StrategyHealthPanel';
 
 const API_URL = "http://100.117.188.86:8080";
 
@@ -36,6 +39,8 @@ export default function App() {
   const [engineMode, setEngineMode] = useState("dry"); // "dry" or "live"
   const [watchlistData, setWatchlistData] = useState([]);
   const [radarCandidates, setRadarCandidates] = useState([]);
+  const [riskGovernor, setRiskGovernor] = useState(null);
+  const [strategyHealth, setStrategyHealth] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
   const [logOutput, setLogOutput] = useState("Connecting to FastAPI daemon...");
@@ -125,11 +130,44 @@ export default function App() {
     }
   };
 
+  const fetchRiskGovernor = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/risk-governor`);
+      const data = await res.json();
+      setRiskGovernor(data);
+    } catch (e) {
+      console.debug("Failed fetching risk governor", e);
+    }
+  };
+
+  const fetchStrategyHealth = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/strategy-health`);
+      const data = await res.json();
+      if (!res.ok || !data.status) {
+        throw new Error(data.detail || 'Strategy health endpoint unavailable');
+      }
+      setStrategyHealth(data);
+    } catch (e) {
+      setStrategyHealth({
+        status: 'DEGRADED',
+        cards: [],
+        cooldowns: {},
+        governor: null,
+        summary: null,
+        error: e.message || 'Strategy health unavailable'
+      });
+      console.debug("Failed fetching strategy health", e);
+    }
+  };
+
   // Initial sync & polling
   useEffect(() => {
     fetchStatus();
     fetchWatchlistData();
     fetchRadarCandidates();
+    fetchRiskGovernor();
+    fetchStrategyHealth();
     fetchPositions();
     fetchOrders();
     fetchLogs();
@@ -137,6 +175,8 @@ export default function App() {
     const intervalStatus = setInterval(fetchStatus, 5000);
     const intervalWatchlist = setInterval(fetchWatchlistData, 2000);
     const intervalRadar = setInterval(fetchRadarCandidates, 2000);
+    const intervalRiskGovernor = setInterval(fetchRiskGovernor, 3000);
+    const intervalStrategyHealth = setInterval(fetchStrategyHealth, 5000);
     const intervalPositions = setInterval(fetchPositions, 1500);
     const intervalOrders = setInterval(fetchOrders, 2000);
     const intervalLogs = setInterval(fetchLogs, 3000);
@@ -145,6 +185,8 @@ export default function App() {
       clearInterval(intervalStatus);
       clearInterval(intervalWatchlist);
       clearInterval(intervalRadar);
+      clearInterval(intervalRiskGovernor);
+      clearInterval(intervalStrategyHealth);
       clearInterval(intervalPositions);
       clearInterval(intervalOrders);
       clearInterval(intervalLogs);
@@ -189,7 +231,11 @@ export default function App() {
 
   const toggleEngine = async () => {
     const action = status.kite_engine !== 'stopped' ? 'stop_engine' : 'start_engine';
-    const body = action === 'start_engine' ? JSON.stringify({ mode: engineMode }) : undefined;
+    let body;
+    if (action === 'start_engine') {
+      if (engineMode === 'live' && !confirm("LIVE REAL-MONEY ENGINE: Start live execution now?")) return;
+      body = JSON.stringify({ mode: engineMode, confirm_live: engineMode === 'live' });
+    }
     setEngineLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/system/${action}`, {
@@ -453,6 +499,28 @@ export default function App() {
         </div>
         
         <div className="header-status">
+          {riskGovernor && (
+            <button
+              onClick={() => setActiveTab('killswitch')}
+              className={`risk-governor-pill ${riskGovernor.status === 'HALTED' ? 'halted' : riskGovernor.status === 'DISABLED' ? 'disabled' : 'armed'}`}
+              title="Open Kill Switch"
+            >
+              <span className="risk-governor-dot" />
+              {riskGovernor.status === 'HALTED' ? 'Trading Halted' : riskGovernor.status === 'DISABLED' ? 'Governor Disabled' : 'Risk Armed'}
+            </button>
+          )}
+
+          {strategyHealth && (
+            <button
+              onClick={() => setActiveTab('health')}
+              className={`execution-health-pill ${strategyHealth.status === 'BLOCKED' ? 'blocked' : strategyHealth.status === 'DEGRADED' ? 'degraded' : 'healthy'}`}
+              title="Open Strategy Health"
+            >
+              <span className="risk-governor-dot" />
+              {strategyHealth.status === 'BLOCKED' ? 'Execution Blocked' : strategyHealth.status === 'DEGRADED' ? 'Execution Degraded' : 'Execution Healthy'}
+            </button>
+          )}
+
           {/* Zerodha Authentication Banner */}
           {status.kite_needs_login ? (
             <a href={status.kite_auth_url} target="_blank" className="btn btn-crimson top-action-button" style={{ textDecoration: 'none' }}>
@@ -594,6 +662,78 @@ export default function App() {
         >
           💼 Risk & Positions
         </button>
+        <button
+          onClick={() => setActiveTab('killswitch')}
+          style={{
+            background: activeTab === 'killswitch' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'killswitch' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'killswitch' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'killswitch' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          🧯 Kill Switch
+        </button>
+        <button
+          onClick={() => setActiveTab('journal')}
+          style={{
+            background: activeTab === 'journal' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'journal' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'journal' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'journal' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          📒 Trade Journal
+        </button>
+        <button
+          onClick={() => setActiveTab('health')}
+          style={{
+            background: activeTab === 'health' ? 'var(--bg-panel)' : 'transparent',
+            border: '1px solid ' + (activeTab === 'health' ? 'var(--border-color)' : 'transparent'),
+            borderBottom: 'none',
+            borderTopLeftRadius: '8px',
+            borderTopRightRadius: '8px',
+            color: activeTab === 'health' ? 'var(--color-cyan)' : 'var(--color-text-muted)',
+            padding: '8px 16px',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            height: '34px',
+            transition: 'all 0.2s ease',
+            boxShadow: activeTab === 'health' ? '0 -4px 10px rgba(0, 229, 255, 0.05)' : 'none',
+            outline: 'none'
+          }}
+        >
+          🩺 Strategy Health
+        </button>
         <button 
           onClick={() => setActiveTab('system')}
           style={{
@@ -677,6 +817,33 @@ export default function App() {
               onSelectSymbol={selectChartSymbol} 
               onCancelOrder={cancelOrder}
               onModifyOrder={modifyOrderParams}
+            />
+          </main>
+        )}
+
+        {/* Tab 3b: Risk Governor / Kill Switch */}
+        {activeTab === 'killswitch' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
+            <KillSwitchPanel
+              governor={riskGovernor}
+              apiUrl={API_URL}
+              onRefresh={fetchRiskGovernor}
+            />
+          </main>
+        )}
+
+        {activeTab === 'journal' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
+            <TradeJournalPanel apiUrl={API_URL} />
+          </main>
+        )}
+
+        {activeTab === 'health' && (
+          <main className="main-workspace" style={{ height: '100%', overflowY: 'auto' }}>
+            <StrategyHealthPanel
+              apiUrl={API_URL}
+              health={strategyHealth}
+              onRefresh={setStrategyHealth}
             />
           </main>
         )}

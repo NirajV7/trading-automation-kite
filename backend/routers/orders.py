@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from kite_telemetry import get_kite_orders, get_kite_positions
 from kite_order_manager import panic_square_off, exit_single_position, book_half_position
+from trade_journal import append_event
 
 router = APIRouter()
 
@@ -95,6 +96,7 @@ def execute_panic():
     all active net positions immediately using marketable limit orders.
     """
     res = panic_square_off()
+    append_event("PANIC_EXIT", state="EXIT_REQUESTED", reason=res.get("message"), source="ui")
     # Force cache refresh in telemetry
     get_kite_positions(force=True)
     if res.get("status") == "error":
@@ -117,6 +119,7 @@ async def execute_exit_position(request: Request):
         return JSONResponse({"status": "error", "message": "Symbol is required"}, status_code=400)
         
     res = exit_single_position(symbol)
+    append_event("MANUAL_EXIT", symbol=symbol, state="EXIT_REQUESTED", reason=res.get("message"), source="ui")
     get_kite_positions(force=True)
     if res.get("status") == "error":
         return JSONResponse(res, status_code=500)
@@ -138,6 +141,7 @@ async def execute_scale_out(request: Request):
         return JSONResponse({"status": "error", "message": "Symbol is required"}, status_code=400)
         
     res = book_half_position(symbol)
+    append_event("SCALE_OUT", symbol=symbol, state="ACTIVE", reason=res.get("message"), source="ui")
     get_kite_positions(force=True)
     if res.get("status") == "error":
         return JSONResponse(res, status_code=500)

@@ -1,4 +1,6 @@
 from kite_order_manager import exit_single_position, modify_or_place_sl
+from order_state_machine import transition_trade
+from trade_journal import append_event
 
 class PositionMonitorMixin:
     def process_live_price_update(self, symbol, ltp, metrics=None):
@@ -48,13 +50,24 @@ class PositionMonitorMixin:
 
         if target_hit:
             self.log_message(f"Target limit breach detected for {symbol} @ ₹{ltp} (Target: ₹{target})")
+            append_event("TARGET_HIT", symbol=symbol, strategy=trade.get("strategy"), direction=direction, state="ACTIVE", qty=trade.get("qty"), price=ltp, reason="Virtual target hit", source="position_monitor")
             if self.dry_run:
                 self.close_active_trade_record(symbol, target, "Target Hit (Simulated)")
             else:
-                # Real order exit: The target limit order should fill, reconciler will clean state
-                pass
+                try:
+                    transition_trade(symbol, "EXIT_REQUESTED", event_type="EXIT_REQUESTED", reason="Virtual target hit", source="position_monitor", price=ltp)
+                    res = exit_single_position(symbol)
+                    if res.get("status") == "success":
+                        self.close_active_trade_record(symbol, ltp, "Virtual Target Hit (Live)")
+                    else:
+                        transition_trade(symbol, "EXIT_FAILED", event_type="EXIT_FAILED", reason=res.get("message"), source="position_monitor", price=ltp)
+                        self.log_message(f"Live target exit not confirmed for {symbol}: {res.get('message')}", is_error=True)
+                except Exception as e:
+                    transition_trade(symbol, "EXIT_FAILED", event_type="EXIT_FAILED", reason=str(e), source="position_monitor", price=ltp)
+                    self.log_message(f"Live exit routing failed during target breach for {symbol}: {e}", is_error=True)
         elif sl_hit:
             self.log_message(f"Stop-loss breach detected for {symbol} @ ₹{ltp} (SL: ₹{sl})")
+            append_event("SL_HIT", symbol=symbol, strategy=trade.get("strategy"), direction=direction, state="ACTIVE", qty=trade.get("qty"), price=ltp, reason="Stop loss hit", source="position_monitor")
             if self.dry_run:
                 self.close_active_trade_record(symbol, sl, "Stop Loss Hit (Simulated)")
             else:
@@ -65,7 +78,7 @@ class PositionMonitorMixin:
                     try:
                         orders = self.kite.orders()
                         for o in orders:
-                            if o.get("order_id") == sl_id and o.get("status") in ["COMPLETE", "CANCELLED", "REJECTED"]:
+                            if o.get("order_id") == sl_id and o.get("status") == "COMPLETE":
                                 sl_already_fired = True
                                 break
                     except Exception:
@@ -78,7 +91,9 @@ class PositionMonitorMixin:
                 else:
                     # SL order hasn't triggered yet (slipped) — fire manual fallback exit
                     try:
+                        transition_trade(symbol, "EXIT_REQUESTED", event_type="EXIT_REQUESTED", reason="SL fallback exit", source="position_monitor", price=ltp)
                         exit_single_position(symbol)
                         self.close_active_trade_record(symbol, ltp, "Stop Loss Hit (Live)")
                     except Exception as e:
+                        transition_trade(symbol, "EXIT_FAILED", event_type="EXIT_FAILED", reason=str(e), source="position_monitor", price=ltp)
                         self.log_message(f"Live exit routing failed during SL breach for {symbol}: {e}", is_error=True)

@@ -3,6 +3,9 @@ import json
 import time
 from datetime import datetime, time as datetime_time
 from kite_utils import round_to_tick
+from risk_governor import can_open_trade
+from symbol_cooldowns import get_active_cooldown
+from trade_journal import append_event
 
 class StrategyEvaluatorMixin:
     def log_gate_failure(self, symbol, gate_key, message):
@@ -21,16 +24,21 @@ class StrategyEvaluatorMixin:
         1. ORB Breakout: Current price crosses 15m high/low boundaries.
         2. Volumetric Radar Spike: Relies on external spike detection callbacks.
         """
-        # Block entry if maximum core positions are already reached
-        if len(self.active_trades) >= 3:
-            return
-            
         # Block if cooldown timer is active
-        if symbol in self.cooldowns and time.time() < self.cooldowns[symbol]:
+        cooldown = get_active_cooldown(symbol)
+        if cooldown:
+            self.log_gate_failure(symbol, "symbol_cooldown", f"Scan {symbol}: blocked by cooldown ({cooldown.get('reason')})")
+            append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="ORB", state="BLOCKED", reason=f"Cooldown active: {cooldown.get('reason')}", source="cooldown")
             return
             
         # Check if already holding position
         if symbol in self.active_trades:
+            return
+
+        governor_gate = can_open_trade(symbol, "ORB", active_trades=self.active_trades)
+        if not governor_gate.get("allowed"):
+            append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="ORB", state="BLOCKED", reason=governor_gate.get("message"), source="risk_governor")
+            self.log_gate_failure(symbol, "risk_governor_orb", f"Risk Governor blocked ORB entry for {symbol}: {governor_gate.get('message')}")
             return
 
         # -------------------------------------------------------------

@@ -109,6 +109,13 @@ venv.bak/
 
 # Local configuration secrets
 backend/config.py
+backend/data/kite_token.json
+backend/data/active_trades.json
+backend/data/live_market_data.json
+backend/data/logger_state.json
+backend/data/pending_signals.json
+backend/data/radar_candidates.json
+backend/data/watchlist.json
 
 # Local reference repositories
 pykiteconnect/

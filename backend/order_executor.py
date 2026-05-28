@@ -1,11 +1,13 @@
-import os
-import csv
 import time
 from datetime import datetime
-from config import RISK_PER_TRADE, CAPITAL_ALLOCATION, TRADE_JOURNAL_CSV, ACTIVE_TRADES_FILE
+from config import RISK_PER_TRADE, CAPITAL_ALLOCATION
 from kite_auth_manager import get_kite_client
 from kite_utils import round_to_tick, handle_auth_failure
-from kite_order_manager import modify_or_place_sl
+from kite_order_manager import modify_or_place_sl, wait_for_order_completion
+from order_state_machine import get_trade_state, has_open_trade, start_trade, transition_trade, close_trade
+from risk_governor import add_halt_reason, can_open_trade
+from symbol_cooldowns import apply_exit_cooldown, entry_error_cooldown
+from trade_journal import append_event, record_trade_close
 
 class OrderExecutorMixin:
     def calculate_position_size(self, symbol, entry_price, sl_price):
@@ -29,16 +31,37 @@ class OrderExecutorMixin:
             
             final_qty = min(raw_qty, max_qty_cap)
             self.log_message(f"Sizing {symbol}: Raw Qty={raw_qty}, Cap Qty={max_qty_cap} (using final quantity {final_qty})")
-            return max(1, final_qty)
+            return max(0, final_qty)
         except Exception as e:
             self.log_message(f"Error sizing position for {symbol}: {e}", is_error=True)
             return 0
 
     def trigger_mock_order_placement(self, symbol, direction, qty, price, sl, target, strategy):
         """Simulates placing and filling bracket orders instantly for dry-run trading."""
+        if has_open_trade(symbol):
+            append_event("SIGNAL_BLOCKED", symbol=symbol, strategy=strategy, direction=direction, state="BLOCKED", qty=qty, price=price, reason="Duplicate open state", source="dry_run")
+            self.log_message(f"[DRY-RUN] State machine blocked duplicate entry for {symbol}", is_error=True)
+            return
+
+        started = start_trade(symbol, strategy, direction, qty=qty, price=price, sl=sl, target=target, source="dry_run")
+        if not started.get("ok"):
+            append_event("SIGNAL_BLOCKED", symbol=symbol, strategy=strategy, direction=direction, state="BLOCKED", qty=qty, price=price, reason=started.get("message"), source="dry_run")
+            self.log_message(f"[DRY-RUN] State machine blocked {symbol}: {started.get('message')}", is_error=True)
+            return
+        transition_trade(symbol, "PRECHECK_PASSED", event_type="PRECHECK_PASSED", reason="Dry-run precheck passed", source="dry_run")
+
+        governor_gate = can_open_trade(symbol, strategy, active_trades=self.active_trades)
+        if not governor_gate.get("allowed"):
+            transition_trade(symbol, "BLOCKED", event_type="SIGNAL_BLOCKED", reason=governor_gate.get("message"), source="risk_governor")
+            self.log_message(f"[DRY-RUN] Risk Governor blocked {strategy} entry for {symbol}: {governor_gate.get('message')}", is_error=True)
+            return
+
         order_id = f"MOCK_ENTRY_{int(time.time())}"
         sl_id = f"MOCK_SL_{int(time.time())}"
-        target_id = f"MOCK_TARGET_{int(time.time())}"
+        transition_trade(symbol, "ENTRY_SENT", event_type="ENTRY_SENT", reason="Mock entry sent", source="dry_run", entry_order_id=order_id, order_id=order_id, price=price)
+        transition_trade(symbol, "ENTRY_FILLED", event_type="ENTRY_FILLED", reason="Mock entry filled", source="dry_run", entry_order_id=order_id, order_id=order_id, price=price)
+        transition_trade(symbol, "SL_PLACED", event_type="SL_PLACED", reason="Mock SL placed", source="dry_run", sl_order_id=sl_id, order_id=sl_id, price=sl)
+        transition_trade(symbol, "ACTIVE", event_type="TRADE_ACTIVE", reason="Mock trade active", source="dry_run")
         
         with self.lock:
             self.active_trades[symbol] = {
@@ -47,8 +70,10 @@ class OrderExecutorMixin:
                 "direction": direction,
                 "sl": sl,
                 "target": target,
+                "entry_id": order_id,
                 "sl_id": sl_id,
-                "target_id": target_id,
+                "target_id": None,
+                "sl_unprotected": False,
                 "strategy": strategy,
                 "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -58,10 +83,30 @@ class OrderExecutorMixin:
 
     def execute_live_order_placement(self, symbol, direction, qty, price, sl, target, strategy):
         """Submits real entry orders and bracket safety orders to Zerodha Kite."""
+        order_id = None
         try:
+            if has_open_trade(symbol):
+                append_event("SIGNAL_BLOCKED", symbol=symbol, strategy=strategy, direction=direction, state="BLOCKED", qty=qty, price=price, reason="Duplicate open state", source="execution")
+                self.log_message(f"State machine blocked duplicate live entry for {symbol}", is_error=True)
+                return
+
+            started = start_trade(symbol, strategy, direction, qty=qty, price=price, sl=sl, target=target, source="execution")
+            if not started.get("ok"):
+                append_event("SIGNAL_BLOCKED", symbol=symbol, strategy=strategy, direction=direction, state="BLOCKED", qty=qty, price=price, reason=started.get("message"), source="execution")
+                self.log_message(f"State machine blocked live entry for {symbol}: {started.get('message')}", is_error=True)
+                return
+            transition_trade(symbol, "PRECHECK_PASSED", event_type="PRECHECK_PASSED", reason="Execution precheck passed", source="execution")
+
+            governor_gate = can_open_trade(symbol, strategy, active_trades=self.active_trades)
+            if not governor_gate.get("allowed"):
+                transition_trade(symbol, "BLOCKED", event_type="SIGNAL_BLOCKED", reason=governor_gate.get("message"), source="risk_governor")
+                self.log_message(f"Risk Governor blocked live {strategy} entry for {symbol}: {governor_gate.get('message')}", is_error=True)
+                return
+
             self.kite = get_kite_client()
             
             # Place entry market order (MIS product for intraday execution leverage)
+            tag = f"KQT_{strategy}_{symbol}"[:20]
             self.log_message(f"Submitting live entry order: {direction} {qty} {symbol} MIS...")
             order_id = self.kite.place_order(
                 variety="regular",
@@ -71,58 +116,65 @@ class OrderExecutorMixin:
                 quantity=qty,
                 product="MIS",
                 order_type="MARKET",
-                market_protection=-1
+                market_protection=-1,
+                tag=tag
             )
+            transition_trade(symbol, "ENTRY_SENT", event_type="ENTRY_SENT", reason="Live entry order submitted", source="execution", entry_order_id=order_id, order_id=order_id, price=price)
             
-            # Retrieve average fill price (wait briefly for matching engine execution)
-            time.sleep(0.5)
-            orders = self.kite.orders()
-            fill_price = price # fallback
-            for o in orders:
-                if o.get("order_id") == order_id:
-                    if o.get("status") == "COMPLETE":
-                        fill_price = float(o.get("average_price", price))
+            # Confirm fill before creating local trade state.
+            fill_result = wait_for_order_completion(self.kite, order_id, timeout=10.0)
+            if fill_result["status"] != "complete":
+                state = fill_result.get("order") or {}
+                failed_state = "ENTRY_REJECTED" if fill_result["status"] == "failed" else "ENTRY_TIMEOUT"
+                transition_trade(symbol, failed_state, event_type=failed_state, reason=f"Entry order {order_id} not filled: {state.get('status', fill_result['status'])}", source="execution", order_id=order_id)
+                entry_error_cooldown(symbol, strategy, failed_state, source="execution")
+                self.log_message(f"Entry order {order_id} not completely filled: {state.get('status', fill_result['status'])}", is_error=True)
+                return
+
+            entry_order = fill_result["order"]
+            if not entry_order.get("average_price"):
+                for order in self.kite.orders():
+                    if order.get("order_id") == order_id:
+                        entry_order = order
                         break
-                    else:
-                        raise RuntimeError(f"Entry order {order_id} not completely filled: {o.get('status')}")
+            fill_price = float(entry_order.get("average_price") or price)
+            filled_qty = int(entry_order.get("filled_quantity") or entry_order.get("quantity") or qty)
+            if filled_qty <= 0:
+                raise RuntimeError(f"Entry order {order_id} completed but filled quantity is zero")
+            transition_trade(symbol, "ENTRY_FILLED", event_type="ENTRY_FILLED", reason="Live entry filled", source="execution", qty=filled_qty, entry_price=fill_price, price=fill_price, order_id=order_id)
             
             # Calculate exit direction for brackets
             exit_dir = "SELL" if direction == "BUY" else "BUY"
             
-            # Place target Limit Order
-            self.log_message(f"Submitting target limit order: {exit_dir} {qty} {symbol} @ ₹{target}...")
-            target_id = self.kite.place_order(
-                variety="regular",
-                exchange="NSE",
-                tradingsymbol=symbol,
-                transaction_type=exit_dir,
-                quantity=qty,
-                product="MIS",
-                order_type="LIMIT",
-                price=round_to_tick(target)
-            )
-            
-            # Place stop-loss SL order
+            # Place protective stop-loss SL order. Target remains virtual in active_trades.
             self.log_message(f"Submitting stop-loss trigger order: {exit_dir} {qty} {symbol} trigger ₹{sl}...")
             sl_res = modify_or_place_sl(
                 symbol=symbol,
                 new_trigger_price=sl,
-                quantity=qty,
+                quantity=filled_qty,
                 transaction_type=exit_dir,
                 product="MIS"
             )
             sl_id = sl_res.get("order_id") if sl_res.get("status") == "success" else None
+            if not sl_id:
+                transition_trade(symbol, "SL_FAILED", event_type="SL_FAILED", reason=sl_res.get("message") or "Protective SL placement failed", source="execution", price=sl)
+                add_halt_reason("MISSING_SL", f"{symbol} entry filled but protective SL placement failed.", source="order_executor")
+                self.log_message(f"Protective SL placement failed for {symbol}; safety guardian will retry. Reason: {sl_res.get('message')}", is_error=True)
+            else:
+                transition_trade(symbol, "SL_PLACED", event_type="SL_PLACED", reason="Protective SL placed", source="execution", sl_order_id=sl_id, order_id=sl_id, price=sl)
+                transition_trade(symbol, "ACTIVE", event_type="TRADE_ACTIVE", reason="Trade active with protective SL", source="execution")
             
             with self.lock:
                 self.active_trades[symbol] = {
                     "entry": fill_price,
-                    "qty": qty,
+                    "qty": filled_qty,
                     "direction": direction,
                     "sl": sl,
                     "target": target,
                     "entry_id": order_id,
-                    "target_id": target_id,
+                    "target_id": None,
                     "sl_id": sl_id,
+                    "sl_unprotected": sl_id is None,
                     "strategy": strategy,
                     "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
@@ -131,37 +183,24 @@ class OrderExecutorMixin:
             self.log_message(f"🚀 LIVE ENTRY FILLED: {direction} {qty} {symbol} @ ₹{fill_price:.2f}. SL: ₹{sl:.2f}, Target: ₹{target:.2f}, Order ID: {order_id}")
             
         except Exception as e:
+            if order_id:
+                transition_trade(symbol, "ENTRY_REJECTED", event_type="ENTRY_REJECTED", reason=str(e), source="execution", order_id=order_id)
+                entry_error_cooldown(symbol, strategy, "Entry routing error", source="execution")
+            else:
+                append_event("ENTRY_REJECTED", symbol=symbol, strategy=strategy, direction=direction, state="ENTRY_REJECTED", qty=qty, price=price, reason=str(e), source="execution")
             self.log_message(f"Order routing failed for {symbol}: {e}", is_error=True)
             handle_auth_failure(e)
 
     def log_trade_to_journal(self, symbol, direction, entry, exit, qty, strategy, reason):
-        """Records completed trades into the CSV journal for P&L diagnostics."""
+        """Records completed trades into the structured JSONL journal."""
         try:
-            os.makedirs(os.path.dirname(TRADE_JOURNAL_CSV), exist_ok=True)
-            file_exists = os.path.exists(TRADE_JOURNAL_CSV)
-            
             pnl = (exit - entry) * qty if direction == "BUY" else (entry - exit) * qty
-            pnl_pct = ((exit - entry) / entry) * 100.0 if direction == "BUY" else ((entry - exit) / entry) * 100.0
-            
-            with open(TRADE_JOURNAL_CSV, "a", newline="") as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(["Timestamp", "Symbol", "Direction", "EntryPrice", "ExitPrice", "Qty", "PnL_INR", "PnL_Pct", "Strategy", "Reason"])
-                writer.writerow([
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    symbol,
-                    direction,
-                    round(entry, 2),
-                    round(exit, 2),
-                    qty,
-                    round(pnl, 2),
-                    round(pnl_pct, 2),
-                    strategy,
-                    reason
-                ])
-            self.log_message(f"Logged trade exit for {symbol} to journal CSV. PnL: ₹{pnl:.2f}")
+            record_trade_close(symbol, direction, entry, exit, qty, strategy, reason)
+            self.log_message(f"Logged trade exit for {symbol} to JSONL journal. PnL: ₹{pnl:.2f}")
+            return pnl
         except Exception as e:
             self.log_message(f"Failed to write trade journal entry: {e}", is_error=True)
+            return 0.0
 
     def close_active_trade_record(self, symbol, exit_price, reason):
         """Clears local state tracking records and logs exit data to journal."""
@@ -169,8 +208,8 @@ class OrderExecutorMixin:
         if not trade:
             return
             
-        # Log metrics to CSV
-        self.log_trade_to_journal(
+        # Log metrics to structured journal
+        pnl = self.log_trade_to_journal(
             symbol=symbol,
             direction=trade["direction"],
             entry=trade["entry"],
@@ -180,8 +219,14 @@ class OrderExecutorMixin:
             reason=reason
         )
         
-        # Enforce entry cooldown (prevent immediate re-entry for 10 minutes)
-        self.cooldowns[symbol] = time.time() + 600.0
+        apply_exit_cooldown(symbol, trade.get("strategy", ""), reason, pnl, source="execution")
+        if hasattr(self, "refresh_cooldowns"):
+            self.refresh_cooldowns()
+        state = get_trade_state(symbol) or {}
+        if state.get("state") not in {"EXIT_REQUESTED", "EXIT_FAILED"}:
+            transition_trade(symbol, "EXIT_REQUESTED", event_type="EXIT_REQUESTED", reason=reason, source="execution", price=exit_price)
+        transition_trade(symbol, "EXIT_FILLED", event_type="EXIT_FILLED", reason=reason, source="execution", price=exit_price)
+        close_trade(symbol, reason=reason, source="execution")
         
         with self.lock:
             if symbol in self.active_trades:

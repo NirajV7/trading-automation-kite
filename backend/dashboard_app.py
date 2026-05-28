@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from kite_auth_manager import check_kite_auth
-from routers import system, kite_auth, watchlist, positions, orders
+from routers import system, kite_auth, watchlist, positions, orders, risk_governor, trade_monitor
 from safety_guardian import run_always_on_safety_guardian
 
 # Initialize FastAPI App
@@ -30,6 +30,8 @@ app.include_router(kite_auth.router)
 app.include_router(watchlist.router)
 app.include_router(positions.router)
 app.include_router(orders.router)
+app.include_router(risk_governor.router)
+app.include_router(trade_monitor.router)
 
 
 @app.on_event("startup")

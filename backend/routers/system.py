@@ -183,7 +183,6 @@ async def start_engine(request: Request):
         data = {}
         
     mode = data.get("mode", "dry").lower()
-    
     if is_process_running("kite_execution_core.py"):
         return JSONResponse({"status": "error", "message": "Execution Core is already running."})
         
