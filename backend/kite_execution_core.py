@@ -10,7 +10,8 @@ from config import (
     ACTIVE_TRADES_FILE,
     ENGINE_LOG,
     INSTRUMENT_MAPPING_FILE,
-    LIVE_MARKET_DATA_FILE
+    LIVE_MARKET_DATA_FILE,
+    KITE_ENABLE_LIVE_TRADING
 )
 from kite_auth_manager import get_kite_client
 from kite_utils import handle_auth_failure
@@ -191,6 +192,8 @@ if __name__ == "__main__":
     # Boot default dry-run mode simulator for safety verification unless 'live' is specified
     is_dry = True
     if len(sys.argv) > 1 and sys.argv[1].lower() == "live":
+        if not KITE_ENABLE_LIVE_TRADING:
+            raise SystemExit("Live trading is disabled. Set KITE_ENABLE_LIVE_TRADING=true in backend/.env to enable real-money execution.")
         is_dry = False
     engine = KiteExecutionCore(dry_run=is_dry)
     engine.run_execution_loop()

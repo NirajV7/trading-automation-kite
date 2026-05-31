@@ -1,8 +1,18 @@
 # Electron Desktop Application
 
-Runs natively on MacBook Air.
+React + Vite + Electron dashboard for the Kite Quant Terminal.
 
 ## Components
-*   `package.json`: Dependency manifests and build scripts.
-*   `main.js`: Electron main process controlling browser windows and system tray.
-*   `src/`: HTML templates and Alpine.js assets representing the cyberpunk visual console.
+
+- `main.js`: Electron main process.
+- `src/App.jsx`: Terminal shell, polling, and tab orchestration.
+- `src/components/`: engine controls, kill switch, positions, orderbook, chart, radar, telemetry, and trade journal panels.
+
+## Commands
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run start
+```

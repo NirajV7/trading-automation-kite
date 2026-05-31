@@ -1,7 +1,7 @@
 {
   "name": "kite-quant-terminal",
   "version": "1.0.0",
-  "description": "High-performance Cyberpunk Desktop Trading Terminal for Zerodha Kite",
+  "description": "Risk-first desktop trading terminal for Zerodha Kite",
   "main": "main.js",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,7 @@
     "electron"
   ],
   "author": "NJ",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "lightweight-charts": "^4.1.1",
     "react": "^18.2.0",

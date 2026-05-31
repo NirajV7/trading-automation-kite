@@ -185,6 +185,15 @@ async def start_engine(request: Request):
     mode = data.get("mode", "dry").lower()
     if is_process_running("kite_execution_core.py"):
         return JSONResponse({"status": "error", "message": "Execution Core is already running."})
+
+    if mode == "live" and not config.KITE_ENABLE_LIVE_TRADING:
+        return JSONResponse(
+            {
+                "status": "error",
+                "message": "Live trading is disabled. Set KITE_ENABLE_LIVE_TRADING=true in backend/.env to enable real-money execution.",
+            },
+            status_code=403,
+        )
         
     venv_py = get_python_executable()
     script_path = os.path.join(config.BACKEND_DIR, "kite_execution_core.py")
