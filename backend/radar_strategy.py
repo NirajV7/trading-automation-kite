@@ -10,6 +10,27 @@ from symbol_cooldowns import get_active_cooldown
 from trade_journal import append_event
 
 class RadarStrategyMixin:
+    def get_watchlist_bias(self, symbol):
+        try:
+            with open(config.WATCHLIST_FILE, "r") as f:
+                watchlist = json.load(f)
+        except Exception:
+            watchlist = {"buy": [], "sell": []}
+
+        def clean(value):
+            return str(value or "").replace("NSE:", "").replace("-EQ", "").replace("-BE", "").upper()
+
+        normalized = clean(symbol)
+        in_buy = normalized in {clean(item) for item in watchlist.get("buy", [])}
+        in_sell = normalized in {clean(item) for item in watchlist.get("sell", [])}
+        if in_buy and in_sell:
+            return "CONFLICT"
+        if in_buy:
+            return "BUY"
+        if in_sell:
+            return "SELL"
+        return None
+
     def load_radar_candidates(self):
         """Loads persistent radar candidate states from JSON."""
         if os.path.exists(config.RADAR_CANDIDATES_FILE):
@@ -88,6 +109,17 @@ class RadarStrategyMixin:
 
                 if vol_ratio >= config.VOLUME_SPIKE_RATIO and price_move_pct >= config.PRICE_MOMENTUM_PCT:
                     direction = "BUY" if prev_close_1m > prev_open_1m else "SELL"
+                    bias = self.get_watchlist_bias(symbol)
+                    if bias == "CONFLICT":
+                        reason = "Conflicting watchlist bias"
+                        append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="RADAR", direction=direction, state="BLOCKED", price=ltp, reason=reason, source="watchlist_bias")
+                        self.log_gate_failure(symbol, "radar_watchlist_bias_conflict", f"Radar blocked {symbol}: {reason}")
+                        return
+                    if bias and bias != direction:
+                        reason = f"Watchlist bias {bias} blocks Radar {direction}"
+                        append_event("SIGNAL_BLOCKED", symbol=symbol, strategy="RADAR", direction=direction, state="BLOCKED", price=ltp, reason=reason, source="watchlist_bias")
+                        self.log_gate_failure(symbol, "radar_watchlist_bias", f"Radar blocked {symbol}: {reason}")
+                        return
                     
                     self.log_message(
                         f"📢 [RADAR] {symbol}: 1m Volume Spike Detected! "

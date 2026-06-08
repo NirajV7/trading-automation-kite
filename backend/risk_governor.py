@@ -1,13 +1,17 @@
 import copy
 import json
 import os
+import threading
 from datetime import datetime, time as datetime_time
 
 import config
+from order_state_machine import get_states
 from trade_journal import read_closed_trades
+from market_data_guard import newest_live_tick_age_seconds
 
 
 RISK_GOVERNOR_FILE = os.path.join(config.DATA_DIR, "risk_governor.json")
+BROKER_LOCAL_MISMATCH_GRACE_SECONDS = 10
 
 DEFAULT_SETTINGS = {
     "enabled": True,
@@ -43,6 +47,20 @@ BOOLEAN_FALSE_VALUES = {"0", "false", "no", "off"}
 
 def now_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_stamp(value):
+    try:
+        return datetime.strptime(str(value or ""), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def age_seconds(value):
+    dt = parse_stamp(value)
+    if not dt:
+        return None
+    return (datetime.now() - dt).total_seconds()
 
 
 def today_key():
@@ -115,31 +133,36 @@ def sanitize_state(raw_state):
     return state, repaired
 
 
-def load_governor():
-    if not os.path.exists(RISK_GOVERNOR_FILE):
-        data = {"settings": copy.deepcopy(DEFAULT_SETTINGS), "state": copy.deepcopy(DEFAULT_STATE)}
-        save_governor(data)
-        return data
-    try:
-        with open(RISK_GOVERNOR_FILE, "r") as f:
-            raw = json.load(f)
-    except Exception:
-        raw = {}
+_lock = threading.RLock()
 
-    settings, settings_repaired = sanitize_settings(raw.get("settings", {}))
-    state, state_repaired = sanitize_state(raw.get("state", {}))
-    data = {"settings": settings, "state": state}
-    if settings_repaired or state_repaired:
-        save_governor(data)
-    return data
+
+def load_governor():
+    with _lock:
+        if not os.path.exists(RISK_GOVERNOR_FILE):
+            data = {"settings": copy.deepcopy(DEFAULT_SETTINGS), "state": copy.deepcopy(DEFAULT_STATE)}
+            save_governor(data)
+            return data
+        try:
+            with open(RISK_GOVERNOR_FILE, "r") as f:
+                raw = json.load(f)
+        except Exception:
+            raw = {}
+    
+        settings, settings_repaired = sanitize_settings(raw.get("settings", {}))
+        state, state_repaired = sanitize_state(raw.get("state", {}))
+        data = {"settings": settings, "state": state}
+        if settings_repaired or state_repaired:
+            save_governor(data)
+        return data
 
 
 def save_governor(data):
-    os.makedirs(config.DATA_DIR, exist_ok=True)
-    temp_path = f"{RISK_GOVERNOR_FILE}.tmp"
-    with open(temp_path, "w") as f:
-        json.dump(data, f, indent=4)
-    os.replace(temp_path, RISK_GOVERNOR_FILE)
+    with _lock:
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        temp_path = f"{RISK_GOVERNOR_FILE}.tmp"
+        with open(temp_path, "w") as f:
+            json.dump(data, f, indent=4)
+        os.replace(temp_path, RISK_GOVERNOR_FILE)
 
 
 def normalize_symbol(value):
@@ -279,15 +302,34 @@ def reset_settings_to_defaults():
     return get_status(evaluate=False)
 
 
-def check_mismatch(positions, active_trades):
+def is_recent_local_entry(trade):
+    age = age_seconds((trade or {}).get("entry_time"))
+    return age is not None and age <= BROKER_LOCAL_MISMATCH_GRACE_SECONDS
+
+
+def is_recent_exit_state(state):
+    if (state or {}).get("state") not in {"EXIT_REQUESTED", "EXIT_FILLED", "CLOSED"}:
+        return False
+    age = age_seconds((state or {}).get("updated_at"))
+    return age is not None and age <= BROKER_LOCAL_MISMATCH_GRACE_SECONDS
+
+
+def check_mismatch(positions, active_trades, states=None):
     broker_symbols = {
         normalize_symbol(pos.get("symbol") or pos.get("tradingsymbol"))
         for pos in positions or []
         if int(pos.get("quantity", 0) or 0) != 0
     }
     local_symbols = {normalize_symbol(sym) for sym in (active_trades or {}).keys()}
-    broker_only = sorted(sym for sym in broker_symbols - local_symbols if sym)
-    local_only = sorted(sym for sym in local_symbols - broker_symbols if sym)
+    states = states if isinstance(states, dict) else get_states()
+    broker_only = sorted(
+        sym for sym in broker_symbols - local_symbols
+        if sym and not is_recent_exit_state(states.get(sym))
+    )
+    local_only = sorted(
+        sym for sym in local_symbols - broker_symbols
+        if sym and not is_recent_local_entry((active_trades or {}).get(sym))
+    )
     return broker_only, local_only
 
 
@@ -320,12 +362,11 @@ def evaluate_rules(positions=None, active_trades=None, auth_needs_login=None):
         add_halt_reason("KITE_AUTH_LOSS", "Kite authentication expired or unavailable.")
 
     if settings.get("halt_on_stale_market_data") and is_market_window():
-        if not os.path.exists(config.LIVE_MARKET_DATA_FILE):
-            add_halt_reason("STALE_MARKET_DATA", "Live market data file missing during market window.")
-        else:
-            age = (datetime.now().timestamp() - os.path.getmtime(config.LIVE_MARKET_DATA_FILE))
-            if age > float(settings["stale_market_data_threshold_seconds"]):
-                add_halt_reason("STALE_MARKET_DATA", f"Live market data stale for {age:.0f}s.")
+        age = newest_live_tick_age_seconds()
+        if age is None:
+            add_halt_reason("STALE_MARKET_DATA", "Live market data has no fresh symbol ticks during market window.")
+        elif age > float(settings["stale_market_data_threshold_seconds"]):
+            add_halt_reason("STALE_MARKET_DATA", f"Live market data real ticks stale for {age:.0f}s.")
 
     if settings.get("halt_on_missing_sl"):
         for symbol, trade in (active_trades or {}).items():

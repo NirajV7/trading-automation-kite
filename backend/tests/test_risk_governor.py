@@ -12,6 +12,7 @@ if BACKEND_DIR not in sys.path:
 
 import config
 import risk_governor
+import order_state_machine
 import trade_journal
 
 
@@ -22,16 +23,19 @@ class RiskGovernorTests(unittest.TestCase):
         self.old_journal = config.TRADE_JOURNAL_CSV
         self.old_event_journal = trade_journal.JOURNAL_FILE
         self.old_live_data = config.LIVE_MARKET_DATA_FILE
+        self.old_state_file = order_state_machine.ORDER_STATES_FILE
         risk_governor.RISK_GOVERNOR_FILE = os.path.join(self.tmp.name, "risk_governor.json")
         config.TRADE_JOURNAL_CSV = os.path.join(self.tmp.name, "trade_journal.csv")
         trade_journal.JOURNAL_FILE = os.path.join(self.tmp.name, "trade_journal_events.jsonl")
         config.LIVE_MARKET_DATA_FILE = os.path.join(self.tmp.name, "live_market_data.json")
+        order_state_machine.ORDER_STATES_FILE = os.path.join(self.tmp.name, "trade_states.json")
 
     def tearDown(self):
         risk_governor.RISK_GOVERNOR_FILE = self.old_governor_file
         config.TRADE_JOURNAL_CSV = self.old_journal
         trade_journal.JOURNAL_FILE = self.old_event_journal
         config.LIVE_MARKET_DATA_FILE = self.old_live_data
+        order_state_machine.ORDER_STATES_FILE = self.old_state_file
         self.tmp.cleanup()
 
     def write_journal(self, pnls):
@@ -69,7 +73,8 @@ class RiskGovernorTests(unittest.TestCase):
         self.assertEqual(status["state"]["halt_reasons"][0]["code"], "MAX_TRADES_PER_DAY")
 
     def test_missing_sl_halts(self):
-        status = risk_governor.get_status(active_trades={"RELIANCE": {"sl_unprotected": True}})
+        with patch.object(risk_governor, "is_market_window", return_value=False):
+            status = risk_governor.get_status(active_trades={"RELIANCE": {"sl_unprotected": True}})
 
         self.assertEqual(status["status"], "HALTED")
         self.assertEqual(status["state"]["halt_reasons"][0]["code"], "MISSING_SL")
@@ -100,7 +105,8 @@ class RiskGovernorTests(unittest.TestCase):
     def test_symbol_loss_lockout_blocks_same_symbol(self):
         self.write_journal([-100])
 
-        res = risk_governor.can_open_trade("RELIANCE", "ORB", active_trades={})
+        with patch.object(risk_governor, "is_market_window", return_value=False):
+            res = risk_governor.can_open_trade("RELIANCE", "ORB", active_trades={})
 
         self.assertFalse(res["allowed"])
         self.assertEqual(res["code"], "SYMBOL_LOSS_LOCKOUT")
@@ -143,6 +149,35 @@ class RiskGovernorTests(unittest.TestCase):
         self.assertEqual(status["settings"]["daily_loss_limit"], 2000.0)
         self.assertEqual(status["settings"]["max_trades_per_day"], 5)
         self.assertTrue(status["settings"]["enabled"])
+
+    def test_local_missing_broker_position_gets_grace_after_entry(self):
+        active = {"RELIANCE": {"entry_time": risk_governor.now_stamp(), "sl_id": "SL1"}}
+
+        with patch.object(risk_governor, "is_market_window", return_value=False):
+            status = risk_governor.get_status(positions=[], active_trades=active)
+
+        self.assertEqual(status["status"], "ARMED")
+        self.assertEqual(status["state"]["halt_reasons"], [])
+
+    def test_local_missing_broker_position_halts_after_grace(self):
+        old_entry = "2000-01-01 09:30:00"
+        active = {"RELIANCE": {"entry_time": old_entry, "sl_id": "SL1"}}
+
+        with patch.object(risk_governor, "is_market_window", return_value=False):
+            status = risk_governor.get_status(positions=[], active_trades=active)
+
+        self.assertEqual(status["status"], "HALTED")
+        self.assertEqual(status["state"]["halt_reasons"][0]["code"], "BROKER_LOCAL_MISMATCH")
+
+    def test_broker_only_position_gets_grace_after_recent_exit(self):
+        order_state_machine.reconcile_trade("RELIANCE", "BUY", 1, 100, 98, 104, strategy="RADAR")
+        order_state_machine.transition_trade("RELIANCE", "CLOSED", event_type="STATE_CLOSED", reason="closed", source="test")
+        positions = [{"tradingsymbol": "RELIANCE", "quantity": 1}]
+
+        with patch.object(risk_governor, "is_market_window", return_value=False):
+            status = risk_governor.get_status(positions=positions, active_trades={})
+
+        self.assertEqual(status["status"], "ARMED")
 
 
 if __name__ == "__main__":

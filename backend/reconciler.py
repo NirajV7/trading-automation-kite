@@ -5,8 +5,34 @@ from kite_auth_manager import get_kite_client
 from kite_order_manager import modify_or_place_sl
 from order_state_machine import reconcile_trade, transition_trade
 from kite_utils import round_to_tick, handle_auth_failure
+from active_trade_store import ActiveTradeStoreError, upsert_trade
 
 class ReconcilerMixin:
+    def broker_close_details(self, symbol, positions, trade):
+        broker_pos = next((p for p in positions if p.get("tradingsymbol") == symbol), None)
+        realized_pnl = None
+        if broker_pos:
+            try:
+                realized_pnl = float(broker_pos.get("pnl"))
+            except (TypeError, ValueError):
+                realized_pnl = None
+
+        entry = float(trade.get("entry", 0.0) or 0.0)
+        qty = int(trade.get("qty", 0) or 0)
+        direction = trade.get("direction")
+        exit_price = None
+        if realized_pnl is not None and entry > 0 and qty > 0:
+            exit_price = entry + (realized_pnl / qty) if direction == "BUY" else entry - (realized_pnl / qty)
+        elif broker_pos:
+            try:
+                exit_price = float(broker_pos.get("last_price") or 0.0) or None
+            except (TypeError, ValueError):
+                exit_price = None
+        return {
+            "exit_price": exit_price or entry,
+            "realized_pnl": realized_pnl,
+        }
+
     def audit_active_positions_with_broker(self):
         """
         Reconciles system memory logs with broker positions.
@@ -28,7 +54,14 @@ class ReconcilerMixin:
             for sym in list(self.active_trades.keys()):
                 if sym not in broker_net:
                     self.log_message(f"Sync: Ticker {sym} closed on Zerodha. Resolving active trade cache.")
-                    self.close_active_trade_record(sym, self.active_trades[sym]["entry"], "Manual Closed (Kite)")
+                    details = self.broker_close_details(sym, positions, self.active_trades[sym])
+                    self.close_active_trade_record(
+                        sym,
+                        details["exit_price"],
+                        "Manual Closed (Kite)",
+                        realized_pnl=details["realized_pnl"],
+                        pnl_pending=details["realized_pnl"] is None,
+                    )
                     
             # 2. Check for missing Stop-Loss orders for active positions
             open_statuses = ["OPEN", "TRIGGER PENDING", "VALIDATION PENDING"]
@@ -78,7 +111,10 @@ class ReconcilerMixin:
                             "strategy": "RECONCILED",
                             "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
-                        self.save_active_trades()
+                        try:
+                            upsert_trade(sym, self.active_trades[sym], source="reconciler")
+                        except ActiveTradeStoreError as store_err:
+                            self.log_message(f"Sync: failed persisting reconciled trade for {sym}: {store_err}", is_error=True)
                         
                 else:
                     # Reconcile SL order ID if not tracked locally or canceled/rejected on Kite
@@ -122,7 +158,10 @@ class ReconcilerMixin:
                         trade["sl_unprotected"] = False
                         transition_trade(sym, "SL_PLACED", event_type="SL_PLACED", reason="Discovered active SL during reconciliation", source="reconciler", sl_order_id=discovered_sl_id, order_id=discovered_sl_id, price=trade.get("sl"))
                         transition_trade(sym, "ACTIVE", event_type="TRADE_ACTIVE", reason="Reconciled SL active", source="reconciler")
-                        self.save_active_trades()
+                        try:
+                            upsert_trade(sym, trade, source="reconciler")
+                        except ActiveTradeStoreError as store_err:
+                            self.log_message(f"Sync: failed persisting discovered SL for {sym}: {store_err}", is_error=True)
                                 
                     if not sl_order_exists:
                         self.log_message(f"Sync: SL order missing for held position {sym}. Replacing bracket safety order...")
@@ -139,7 +178,10 @@ class ReconcilerMixin:
                             trade["sl_unprotected"] = False
                             transition_trade(sym, "SL_PLACED", event_type="SL_PLACED", reason="Replaced missing SL during reconciliation", source="reconciler", sl_order_id=trade["sl_id"], order_id=trade["sl_id"], price=trade.get("sl"))
                             transition_trade(sym, "ACTIVE", event_type="TRADE_ACTIVE", reason="Reconciled SL active", source="reconciler")
-                            self.save_active_trades()
+                            try:
+                                upsert_trade(sym, trade, source="reconciler")
+                            except ActiveTradeStoreError as store_err:
+                                self.log_message(f"Sync: failed persisting replaced SL for {sym}: {store_err}", is_error=True)
                             self.log_message(f"Sync: Successfully replaced SL order ID to {trade['sl_id']}")
                         else:
                             transition_trade(sym, "SL_FAILED", event_type="SL_FAILED", reason=sl_res.get("message"), source="reconciler", price=trade.get("sl"))

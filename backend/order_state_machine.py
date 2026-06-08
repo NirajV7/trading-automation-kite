@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import datetime
 
 import config
@@ -7,6 +8,11 @@ from trade_journal import append_event, normalize_symbol
 
 
 ORDER_STATES_FILE = os.path.join(config.DATA_DIR, "trade_states.json")
+EXIT_LOCKS_DIR = os.path.join(config.DATA_DIR, "exit_locks")
+EXIT_LOCK_TTL_SECONDS = 120
+EXIT_IN_PROGRESS_STATES = {"EXIT_REQUESTED"}
+EXIT_TERMINAL_STATES = {"EXIT_FILLED", "CLOSED"}
+EXIT_ALLOWED_STATES = {"ACTIVE", "SL_FAILED", "EXIT_FAILED", "RECONCILED"}
 
 OPEN_STATES = {
     "SIGNAL_DETECTED",
@@ -64,6 +70,116 @@ def save_states(states):
     with open(temp_path, "w") as f:
         json.dump(states, f, indent=4)
     os.replace(temp_path, ORDER_STATES_FILE)
+
+
+
+def exit_lock_path(symbol):
+    return os.path.join(EXIT_LOCKS_DIR, f"{normalize_symbol(symbol)}.lock")
+
+
+def read_exit_lock(symbol):
+    path = exit_lock_path(symbol)
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else None
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return {"symbol": normalize_symbol(symbol), "created_epoch": 0, "corrupt": True}
+
+
+def release_exit_lock(symbol):
+    try:
+        os.remove(exit_lock_path(symbol))
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def is_fresh_exit_lock(symbol, ttl_seconds=EXIT_LOCK_TTL_SECONDS):
+    data = read_exit_lock(symbol)
+    if not data:
+        return False, data
+    try:
+        age = time.time() - float(data.get("created_epoch", 0))
+    except (TypeError, ValueError):
+        age = ttl_seconds + 1
+    return age <= ttl_seconds, data
+
+
+def acquire_exit_lock(symbol, reason, source, ttl_seconds=EXIT_LOCK_TTL_SECONDS):
+    symbol = normalize_symbol(symbol)
+    os.makedirs(EXIT_LOCKS_DIR, exist_ok=True)
+    path = exit_lock_path(symbol)
+    fresh, existing = is_fresh_exit_lock(symbol, ttl_seconds=ttl_seconds)
+    if fresh:
+        return {"ok": False, "message": f"{symbol} exit already in progress", "lock": existing}
+    if existing:
+        release_exit_lock(symbol)
+
+    payload = {
+        "symbol": symbol,
+        "source": source,
+        "reason": reason,
+        "created_at": now_stamp(),
+        "created_epoch": time.time(),
+    }
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(path, flags, 0o644)
+    except FileExistsError:
+        fresh, existing = is_fresh_exit_lock(symbol, ttl_seconds=ttl_seconds)
+        if fresh:
+            return {"ok": False, "message": f"{symbol} exit already in progress", "lock": existing}
+        release_exit_lock(symbol)
+        fd = os.open(path, flags, 0o644)
+    with os.fdopen(fd, "w") as f:
+        json.dump(payload, f, indent=4)
+    return {"ok": True, "lock": payload}
+
+
+def begin_exit(symbol, reason, source, price=None, ttl_seconds=EXIT_LOCK_TTL_SECONDS):
+    symbol = normalize_symbol(symbol)
+    states = load_states()
+    state = states.get(symbol)
+    current = state.get("state") if state else None
+
+    if current in EXIT_TERMINAL_STATES:
+        return {"ok": False, "message": f"{symbol} already closed ({current})", "state": state}
+
+    if current in EXIT_IN_PROGRESS_STATES:
+        fresh, lock = is_fresh_exit_lock(symbol, ttl_seconds=ttl_seconds)
+        if fresh:
+            return {"ok": False, "message": f"{symbol} exit already requested", "state": state, "lock": lock}
+        release_exit_lock(symbol)
+        lock_res = acquire_exit_lock(symbol, reason, source, ttl_seconds=ttl_seconds)
+        if not lock_res.get("ok"):
+            return lock_res
+        return {"ok": True, "message": f"{symbol} exit retry acquired", "state": state, "lock": lock_res.get("lock")}
+
+    if current not in EXIT_ALLOWED_STATES:
+        return {"ok": False, "message": f"{symbol} state {current} cannot begin exit", "state": state}
+
+    lock_res = acquire_exit_lock(symbol, reason, source, ttl_seconds=ttl_seconds)
+    if not lock_res.get("ok"):
+        return lock_res
+
+    transition = transition_trade(symbol, "EXIT_REQUESTED", event_type="EXIT_REQUESTED", reason=reason, source=source, price=price)
+    if not transition.get("ok"):
+        release_exit_lock(symbol)
+        return transition
+    transition["lock"] = lock_res.get("lock")
+    return transition
+
+
+def finish_exit(symbol, success, reason, source, price=None, order_id=None):
+    if success:
+        res = transition_trade(symbol, "EXIT_FILLED", event_type="EXIT_FILLED", reason=reason, source=source, price=price, order_id=order_id)
+    else:
+        res = transition_trade(symbol, "EXIT_FAILED", event_type="EXIT_FAILED", reason=reason, source=source, price=price, order_id=order_id)
+    release_exit_lock(symbol)
+    return res
 
 
 def has_open_trade(symbol):

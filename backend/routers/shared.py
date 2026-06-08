@@ -8,6 +8,7 @@ import json
 import subprocess
 
 import config
+from active_trade_store import ActiveTradeStoreError, load_trades, replace_trades
 
 
 def get_process_command_lines(script_name: str) -> list:
@@ -19,7 +20,7 @@ def get_process_command_lines(script_name: str) -> list:
     if os.name == 'nt':
         try:
             cmd = 'wmic process where "name=\'python.exe\' or name=\'pythonw.exe\'" get commandline'
-            output = subprocess.check_output(cmd, shell=True).decode(errors='ignore')
+            output = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode(errors='ignore')
             for line in output.splitlines():
                 line_strip = line.strip()
                 if script_name in line_strip and "wmic" not in line_strip:
@@ -69,7 +70,7 @@ def kill_process_by_name(script_name: str):
     if os.name == 'nt':
         try:
             cmd = 'wmic process where "name=\'python.exe\' or name=\'pythonw.exe\'" get processid,commandline'
-            output = subprocess.check_output(cmd, shell=True).decode(errors='ignore')
+            output = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode(errors='ignore')
             killed_any = False
             for line in output.splitlines():
                 line_strip = line.strip()
@@ -116,24 +117,16 @@ def load_watchlist():
 
 def load_local_trades():
     """Reads persisted active trades from active_trades.json."""
-    if os.path.exists(config.ACTIVE_TRADES_FILE):
-        try:
-            with open(config.ACTIVE_TRADES_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
+    return load_trades(strict=False)
 
 
 def save_local_trades(trades):
-    """Saves active trades atomically to active_trades.json."""
+    """Saves active trades using the shared cross-process lock."""
     try:
-        temp_path = f"{config.ACTIVE_TRADES_FILE}.tmp"
-        with open(temp_path, "w") as f:
-            json.dump(trades, f, indent=4)
-        os.replace(temp_path, config.ACTIVE_TRADES_FILE)
-    except Exception as e:
+        return replace_trades(trades, source="router")
+    except ActiveTradeStoreError as e:
         print(f"❌ Failed to save active trades: {e}")
+        return None
 
 
 def load_symbol_to_token():

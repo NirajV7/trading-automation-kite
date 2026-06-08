@@ -73,6 +73,16 @@ def get_net_position(kite, symbol):
     return None
 
 
+def get_position_pnl(kite, symbol):
+    pos = get_net_position(kite, symbol)
+    if not pos:
+        return None
+    try:
+        return float(pos.get("pnl"))
+    except (TypeError, ValueError):
+        return None
+
+
 def wait_until_position_flat(kite, symbol, timeout=10.0, poll_interval=0.5):
     deadline = time.time() + timeout
     last_pos = None
@@ -267,10 +277,17 @@ def exit_single_position(symbol):
             
         # 2. Square off position
         squared = False
+        exit_order_id = None
+        exit_price = None
+        realized_pnl = None
         positions = kite.positions()
         net_positions = positions.get("net", [])
         for p in net_positions:
             if p.get("tradingsymbol") == symbol:
+                try:
+                    realized_pnl = float(p.get("pnl"))
+                except (TypeError, ValueError):
+                    realized_pnl = None
                 qty = p.get("quantity", 0)
                 if qty != 0:
                     exchange = p.get("exchange")
@@ -278,17 +295,26 @@ def exit_single_position(symbol):
                     tx_type = "SELL" if qty > 0 else "BUY"
                     exit_qty = abs(qty)
                     
-                    order_id = place_marketable_limit_exit(kite, exchange, symbol, tx_type, exit_qty, product,
-                                                           last_price=p.get("last_price", 0.0), tag=f"KQT_EXIT_{symbol}"[:20])
-                    res = wait_for_order_completion(kite, order_id)
+                    exit_order_id = place_marketable_limit_exit(kite, exchange, symbol, tx_type, exit_qty, product,
+                                                                last_price=p.get("last_price", 0.0), tag=f"KQT_EXIT_{symbol}"[:20])
+                    res = wait_for_order_completion(kite, exit_order_id)
+                    order = res.get("order") or {}
+                    try:
+                        exit_price = float(order.get("average_price") or order.get("price") or 0.0) or None
+                    except (TypeError, ValueError):
+                        exit_price = None
                     squared = res["status"] == "complete" or wait_until_position_flat(kite, symbol, timeout=3.0)
+                    realized_pnl = get_position_pnl(kite, symbol)
                     if not squared:
-                        return {"status": "error", "message": f"Exit order {order_id} for {symbol} not confirmed: {res['status']}"}
+                        return {"status": "error", "message": f"Exit order {exit_order_id} for {symbol} not confirmed: {res['status']}"}
                     break
         
         return {
             "status": "success" if squared else "error",
-            "message": f"Exit completed for {symbol}. Orders cancelled: {cancelled}, Position squared: {squared}"
+            "message": f"Exit completed for {symbol}. Orders cancelled: {cancelled}, Position squared: {squared}",
+            "order_id": exit_order_id,
+            "exit_price": exit_price,
+            "realized_pnl": realized_pnl,
         }
     except Exception as e:
         handle_auth_failure(e)

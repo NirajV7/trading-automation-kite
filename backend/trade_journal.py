@@ -2,12 +2,13 @@ import csv
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 
 
 JOURNAL_FILE = os.path.join(config.DATA_DIR, "trade_journal_events.jsonl")
+BLOCKED_DEDUPE_SECONDS = 60
 
 
 def now_stamp():
@@ -18,8 +19,54 @@ def today_key():
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def parse_timestamp(value):
+    try:
+        return datetime.strptime(str(value or ""), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
 def normalize_symbol(value):
     return str(value or "").replace("NSE:", "").replace("-EQ", "").replace("-BE", "").upper()
+
+
+def is_recent_duplicate_block(event):
+    if event.get("event_type") not in {"SIGNAL_BLOCKED", "ENTRY_REJECTED", "ENTRY_TIMEOUT"}:
+        return False
+    if not os.path.exists(JOURNAL_FILE):
+        return False
+
+    cutoff = datetime.now() - timedelta(seconds=BLOCKED_DEDUPE_SECONDS)
+    event_key = (
+        event.get("event_type"),
+        normalize_symbol(event.get("symbol")),
+        event.get("strategy") or "",
+        event.get("reason") or "",
+    )
+
+    try:
+        with open(JOURNAL_FILE, "r") as f:
+            lines = f.readlines()[-250:]
+    except Exception:
+        return False
+
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = parse_timestamp(row.get("timestamp"))
+        if ts and ts < cutoff:
+            break
+        row_key = (
+            row.get("event_type"),
+            normalize_symbol(row.get("symbol")),
+            row.get("strategy") or "",
+            row.get("reason") or "",
+        )
+        if row_key == event_key:
+            return True
+    return False
 
 
 def append_event(
@@ -54,6 +101,9 @@ def append_event(
     }
     if extra:
         event["extra"] = extra
+
+    if is_recent_duplicate_block(event):
+        return event
 
     with open(JOURNAL_FILE, "a") as f:
         f.write(json.dumps(event, separators=(",", ":")) + "\n")
@@ -120,11 +170,29 @@ def read_legacy_csv_closed_trades(date=None):
 def read_closed_trades(date=None):
     date = date or today_key()
     closed = []
-    for event in read_events(date=date, event_type="TRADE_CLOSED", limit=10000):
+    seen = set()
+    events = sorted(
+        read_events(date=date, event_type="TRADE_CLOSED", limit=10000),
+        key=lambda item: item.get("timestamp", ""),
+    )
+    for event in events:
         try:
             pnl = float(event.get("pnl") or 0.0)
         except (TypeError, ValueError):
             pnl = 0.0
+        extra = event.get("extra") if isinstance(event.get("extra"), dict) else {}
+        key = (
+            normalize_symbol(event.get("symbol")),
+            event.get("direction", ""),
+            event.get("strategy", ""),
+            int(event.get("qty") or 0),
+            round(float(extra.get("entry_price") or 0.0), 2),
+            round(float(extra.get("exit_price") or event.get("price") or 0.0), 2),
+            round(pnl, 2),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
         closed.append({
             "timestamp": event.get("timestamp", ""),
             "symbol": normalize_symbol(event.get("symbol")),
@@ -135,13 +203,35 @@ def read_closed_trades(date=None):
             "source": "jsonl",
         })
     if closed:
-        return sorted(closed, key=lambda item: item["timestamp"])
+        return closed
     return sorted(read_legacy_csv_closed_trades(date), key=lambda item: item["timestamp"])
 
 
-def record_trade_close(symbol, direction, entry, exit_price, qty, strategy, reason, source="execution"):
-    pnl = (exit_price - entry) * qty if direction == "BUY" else (entry - exit_price) * qty
+def record_trade_close(
+    symbol,
+    direction,
+    entry,
+    exit_price,
+    qty,
+    strategy,
+    reason,
+    source="execution",
+    realized_pnl=None,
+    order_id=None,
+    pnl_pending=False,
+):
+    estimated_pnl = (exit_price - entry) * qty if direction == "BUY" else (entry - exit_price) * qty
+    pnl = None if pnl_pending else (realized_pnl if realized_pnl is not None else estimated_pnl)
     pnl_pct = ((exit_price - entry) / entry) * 100.0 if direction == "BUY" else ((entry - exit_price) / entry) * 100.0
+    extra = {
+        "entry_price": round(float(entry), 2),
+        "exit_price": round(float(exit_price), 2),
+        "pnl_pct": round(float(pnl_pct), 2),
+    }
+    if pnl_pending:
+        extra["pnl_status"] = "PNL_PENDING"
+    if realized_pnl is not None:
+        extra["broker_pnl"] = round(float(realized_pnl), 2)
     return append_event(
         "TRADE_CLOSED",
         symbol=symbol,
@@ -150,14 +240,11 @@ def record_trade_close(symbol, direction, entry, exit_price, qty, strategy, reas
         state="CLOSED",
         qty=qty,
         price=exit_price,
+        order_id=order_id,
         pnl=pnl,
         reason=reason,
         source=source,
-        extra={
-            "entry_price": round(float(entry), 2),
-            "exit_price": round(float(exit_price), 2),
-            "pnl_pct": round(float(pnl_pct), 2),
-        },
+        extra=extra,
     )
 
 

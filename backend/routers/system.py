@@ -4,18 +4,58 @@ Handles: status, logs, start/stop logger, start/stop engine, force_refresh.
 """
 
 import os
+import json
+import shutil
 import subprocess
 from datetime import datetime
+from collections import deque
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 import config
+from execution_readiness import assess_execution_readiness
+from market_data_guard import read_live_market_snapshot
 from kite_auth_manager import check_kite_auth
 from kite_telemetry import get_kite_margin, get_kite_orders, get_kite_positions
 from kite_utils import get_public_ip
 from routers.shared import is_process_running, get_python_executable, set_logger_enabled, kill_process_by_name, get_process_command_lines
 
 router = APIRouter()
+LOG_FILES = ("engine.log", "ticker.log", "startup_backend.log", "startup_frontend.log")
+
+
+def archive_active_logs(reason="manual"):
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    archive_dir = os.path.join(config.LOGS_DIR, "archive", stamp)
+    os.makedirs(archive_dir, exist_ok=True)
+
+    archived = []
+    for name in LOG_FILES:
+        src = os.path.join(config.LOGS_DIR, name)
+        if os.path.exists(src) and os.path.getsize(src) > 0:
+            shutil.move(src, os.path.join(archive_dir, name))
+            archived.append(name)
+
+    header = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [INFO] Fresh log started after archive ({reason}).\n"
+    for name in ("engine.log", "ticker.log"):
+        with open(os.path.join(config.LOGS_DIR, name), "w") as f:
+            f.write(header)
+
+    return {"archive_dir": archive_dir, "archived": archived}
+
+
+def read_execution_status(engine_state):
+    if engine_state != "stopped" and os.path.exists(config.EXECUTION_STATUS_FILE):
+        try:
+            with open(config.EXECUTION_STATUS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return assess_execution_readiness(
+        dry_run=(engine_state == "dry"),
+        orb_count=0,
+        snapshot=read_live_market_snapshot(),
+    )
 
 
 @router.get("/api/status")
@@ -40,6 +80,8 @@ def api_status():
         else:
             engine_state = "dry"
 
+    readiness = read_execution_status(engine_state)
+
     # Zerodha Auth checks
     needs_login, auth_url = check_kite_auth()
     margin_data = None
@@ -56,7 +98,8 @@ def api_status():
         "kite_needs_login": needs_login,
         "kite_auth_url": auth_url,
         "kite_margin": margin_data,
-        "network": network_info
+        "network": network_info,
+        "execution_readiness": readiness,
     })
 
 
@@ -64,23 +107,22 @@ def api_status():
 def api_logs():
     """
     Returns the last 30 lines of the shared system engine log.
-    Automatically rotates/clears the log file if it exceeds 1MB.
     """
     if not os.path.exists(config.ENGINE_LOG):
         return JSONResponse({"logs": "Log file not found."})
         
     try:
-        # Check file size for automatic rotation
-        if os.path.getsize(config.ENGINE_LOG) > 1024 * 1024:
-            with open(config.ENGINE_LOG, "w") as f:
-                f.write(f"[{datetime.now().strftime('%H:%M:%S')}] ♻️ Engine Log Rotated (Exceeded 1MB)\n")
-        
         with open(config.ENGINE_LOG, "r") as f:
-            lines = f.readlines()
-            last_lines = "".join(lines[-30:])
+            last_lines = "".join(deque(f, maxlen=30))
             return JSONResponse({"logs": last_lines})
     except Exception as e:
         return JSONResponse({"logs": f"Error reading logs: {str(e)}"})
+
+
+@router.post("/api/system/archive_logs")
+def archive_logs():
+    result = archive_active_logs(reason="api")
+    return JSONResponse({"status": "success", **result})
 
 
 @router.post("/api/system/start_logger")
@@ -185,15 +227,6 @@ async def start_engine(request: Request):
     mode = data.get("mode", "dry").lower()
     if is_process_running("kite_execution_core.py"):
         return JSONResponse({"status": "error", "message": "Execution Core is already running."})
-
-    if mode == "live" and not config.KITE_ENABLE_LIVE_TRADING:
-        return JSONResponse(
-            {
-                "status": "error",
-                "message": "Live trading is disabled. Set KITE_ENABLE_LIVE_TRADING=true in backend/.env to enable real-money execution.",
-            },
-            status_code=403,
-        )
         
     venv_py = get_python_executable()
     script_path = os.path.join(config.BACKEND_DIR, "kite_execution_core.py")

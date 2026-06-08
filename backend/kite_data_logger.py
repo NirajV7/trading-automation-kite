@@ -315,6 +315,8 @@ class KiteDataLogger:
             
         # Get timestamp. Fallback to system time if exchange time is None
         tick_time = tick.get("exchange_timestamp") or datetime.now()
+        tick_epoch = time.time()
+        tick_at = tick_time.strftime("%Y-%m-%d %H:%M:%S") if hasattr(tick_time, "strftime") else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Calculate percent change from previous close (ohlc.close)
         ohlc = tick.get("ohlc", {})
@@ -341,7 +343,9 @@ class KiteDataLogger:
                 "today_high": today_high if today_high else self.live_state[sym].get("today_high"),
                 "today_low": today_low if today_low else self.live_state[sym].get("today_low"),
                 "buy_quantity": tick.get("total_buy_quantity", tick.get("buy_quantity", 0.0)),
-                "sell_quantity": tick.get("total_sell_quantity", tick.get("sell_quantity", 0.0))
+                "sell_quantity": tick.get("total_sell_quantity", tick.get("sell_quantity", 0.0)),
+                "tick_epoch": tick_epoch,
+                "tick_at": tick_at
             })
             
             # Aggregate candles for 1m, 5m, and 15m

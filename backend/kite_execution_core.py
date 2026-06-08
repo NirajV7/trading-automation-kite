@@ -11,7 +11,14 @@ from config import (
     ENGINE_LOG,
     INSTRUMENT_MAPPING_FILE,
     LIVE_MARKET_DATA_FILE,
-    KITE_ENABLE_LIVE_TRADING
+    EXECUTION_STATUS_FILE,
+    ENABLE_RADAR_LIVE_ENTRIES
+)
+from execution_readiness import (
+    ORB_BUILDING,
+    READY,
+    assess_execution_readiness,
+    is_orb_window,
 )
 from kite_auth_manager import get_kite_client
 from kite_utils import handle_auth_failure
@@ -24,6 +31,7 @@ from position_monitor import PositionMonitorMixin
 from reconciler import ReconcilerMixin
 from radar_strategy import RadarStrategyMixin
 from symbol_cooldowns import get_active_cooldowns
+from active_trade_store import ActiveTradeStoreError, load_trades, replace_trades
 
 # -------------------------------------------------------------
 # STUB: Notifications (Telegram removed — log only)
@@ -65,6 +73,8 @@ class KiteExecutionCore(
         self.cooldowns = {}       # {SYMBOL: cooldown metadata loaded from symbol_cooldowns.json}
         self.orb_ranges = {}      # {SYMBOL: {"high": value, "low": value}}
         self.radar_candidates = {} # {SYMBOL: candidate_details}
+        self.readiness_status = None
+        self.last_orb_retry = 0.0
         
         # Load existing active trades and radar candidates from disk
         self.load_active_trades()
@@ -100,32 +110,67 @@ class KiteExecutionCore(
 
     def load_active_trades(self, silent=False):
         """Reads persisted active trades from active_trades.json."""
-        if os.path.exists(ACTIVE_TRADES_FILE):
-            try:
-                with open(ACTIVE_TRADES_FILE, "r") as f:
-                    self.active_trades = json.load(f)
-                if not silent:
-                    self.log_message(f"Loaded {len(self.active_trades)} active trades from disk cache.")
-            except Exception as e:
-                self.log_message(f"Failed to load active trades: {e}", is_error=True)
+        try:
+            self.active_trades = load_trades(strict=False)
+            if not silent:
+                self.log_message(f"Loaded {len(self.active_trades)} active trades from disk cache.")
+        except Exception as e:
+            self.log_message(f"Failed to load active trades: {e}", is_error=True)
 
     def save_active_trades(self):
-        """Saves current active trades list atomically to active_trades.json."""
+        """Saves current active trades list with the shared cross-process lock."""
         try:
-            temp_path = f"{ACTIVE_TRADES_FILE}.tmp"
-            with open(temp_path, "w") as f:
-                json.dump(self.active_trades, f, indent=4)
-            os.replace(temp_path, ACTIVE_TRADES_FILE)
-        except Exception as e:
+            replace_trades(self.active_trades, source="execution_core")
+        except ActiveTradeStoreError as e:
             self.log_message(f"Failed to save active trades file: {e}", is_error=True)
+
+    def update_readiness_status(self, market_snapshot=None):
+        readiness = assess_execution_readiness(
+            dry_run=self.dry_run,
+            orb_count=len(self.orb_ranges),
+            snapshot=market_snapshot,
+        )
+        status_payload = {
+            **readiness,
+            "mode": "DRY_RUN" if self.dry_run else "LIVE",
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        try:
+            temp_path = f"{EXECUTION_STATUS_FILE}.tmp"
+            with open(temp_path, "w") as f:
+                json.dump(status_payload, f, indent=4)
+            os.replace(temp_path, EXECUTION_STATUS_FILE)
+        except Exception as e:
+            self.log_message(f"Failed to write execution readiness status: {e}", is_error=True)
+        if readiness["status"] != self.readiness_status:
+            age = readiness.get("tick_age_seconds")
+            age_text = "n/a" if age is None else f"{age:.1f}s"
+            self.log_message(
+                f"Execution readiness -> {readiness['status']} | {readiness['reason']} | "
+                f"tick_age={age_text} | orb_ranges={readiness.get('orb_count', 0)}"
+            )
+            self.readiness_status = readiness["status"]
+        return readiness
+
+    def maybe_build_orb_ranges(self, readiness):
+        if self.dry_run or not is_orb_window():
+            return readiness
+        if self.orb_ranges:
+            return readiness
+        now = time.time()
+        if now - self.last_orb_retry < 30.0:
+            return readiness
+        self.last_orb_retry = now
+        self.establish_orb_ranges()
+        return self.update_readiness_status()
 
     def run_execution_loop(self):
         """
         Background listener loop: reads live_market_data.json ticks every second
         to process real-time updates and trigger strategy evaluations.
         """
-        self.establish_orb_ranges()
-        
+        self.update_readiness_status()
+
         last_audit = 0.0
         self.log_message("Execution monitor loop started successfully.")
         
@@ -144,6 +189,8 @@ class KiteExecutionCore(
                 if os.path.exists(LIVE_MARKET_DATA_FILE):
                     with open(LIVE_MARKET_DATA_FILE, "r") as f:
                         market_snapshot = json.load(f)
+                    readiness = self.update_readiness_status(market_snapshot)
+                    readiness = self.maybe_build_orb_ranges(readiness)
                         
                     # Load current watchlist symbols dynamically
                     from config import WATCHLIST_FILE
@@ -172,11 +219,13 @@ class KiteExecutionCore(
                         if sym in self.active_trades:
                             self.process_live_price_update(sym, ltp, ticker_data)
                         else:
-                            # Evaluate breakout triggers on inactive scanners
-                            self.evaluate_strategy_signals(sym, ltp, ticker_data)
-                            
-                            # Evaluate volume spike radar on all active tickers (Nifty 50 + watchlist)
-                            self.evaluate_radar_signals(sym, ltp, ticker_data)
+                            # ORB runs only after the 09:15 candle exists and ticks are fresh.
+                            if readiness.get("orb_ready"):
+                                self.evaluate_strategy_signals(sym, ltp, ticker_data)
+
+                            # Radar can run from 09:15 when live ticks are fresh.
+                            if ENABLE_RADAR_LIVE_ENTRIES and readiness.get("radar_ready"):
+                                self.evaluate_radar_signals(sym, ltp, ticker_data)
                             
             except Exception as e:
                 self.log_message(f"Exception inside execution loop: {e}", is_error=True)
@@ -192,8 +241,6 @@ if __name__ == "__main__":
     # Boot default dry-run mode simulator for safety verification unless 'live' is specified
     is_dry = True
     if len(sys.argv) > 1 and sys.argv[1].lower() == "live":
-        if not KITE_ENABLE_LIVE_TRADING:
-            raise SystemExit("Live trading is disabled. Set KITE_ENABLE_LIVE_TRADING=true in backend/.env to enable real-money execution.")
         is_dry = False
     engine = KiteExecutionCore(dry_run=is_dry)
     engine.run_execution_loop()

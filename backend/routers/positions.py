@@ -13,7 +13,8 @@ import config
 from kite_telemetry import get_kite_positions, get_kite_orders
 from kite_order_manager import modify_or_place_sl
 from kite_utils import get_tick_size
-from routers.shared import load_local_trades, save_local_trades
+from routers.shared import load_local_trades
+from active_trade_store import ActiveTradeStoreError, merge_trades
 
 router = APIRouter()
 
@@ -250,24 +251,22 @@ async def execute_modify_sl(request: Request):
     # Immediately sync the new SL to active_trades.json if tracked
     if res.get("status") == "success":
         new_sl_val = res.get("new_sl") or float(new_sl)
-        if os.path.exists(config.ACTIVE_TRADES_FILE):
-            try:
-                with open(config.ACTIVE_TRADES_FILE, "r") as f:
-                    local_trades = json.load(f)
-                if symbol in local_trades:
-                    local_trades[symbol]["sl"] = new_sl_val
-                    if res.get("order_id"):
-                        local_trades[symbol]["sl_id"] = res.get("order_id")
-                    elif sl_order_id:
-                        local_trades[symbol]["sl_id"] = sl_order_id
-                    
-                    temp_path = f"{config.ACTIVE_TRADES_FILE}.tmp"
-                    with open(temp_path, "w") as f:
-                        json.dump(local_trades, f, indent=4)
-                    os.replace(temp_path, config.ACTIVE_TRADES_FILE)
-                    print(f"🛡️ [API modify_sl] Immediately updated sl to ₹{new_sl_val} in active_trades.json")
-            except Exception as e:
-                print(f"❌ [API modify_sl] Failed to immediately update active_trades.json: {e}")
+        try:
+            def update_sl(local_trades):
+                if symbol not in local_trades:
+                    return False
+                local_trades[symbol]["sl"] = new_sl_val
+                if res.get("order_id"):
+                    local_trades[symbol]["sl_id"] = res.get("order_id")
+                elif sl_order_id:
+                    local_trades[symbol]["sl_id"] = sl_order_id
+                return True
+
+            updated = merge_trades(update_sl, source="positions_api_modify_sl")
+            if updated:
+                print(f"🛡️ [API modify_sl] Immediately updated sl to ₹{new_sl_val} in active_trades.json")
+        except ActiveTradeStoreError as e:
+            print(f"❌ [API modify_sl] Failed to immediately update active_trades.json: {e}")
                 
     return JSONResponse(res)
 
@@ -295,20 +294,18 @@ async def execute_modify_target(request: Request):
     
     # 1. Update active_trades.json if the trade is in there
     updated_local = False
-    if os.path.exists(config.ACTIVE_TRADES_FILE):
-        try:
-            with open(config.ACTIVE_TRADES_FILE, "r") as f:
-                local_trades = json.load(f)
-            if symbol in local_trades:
-                local_trades[symbol]["target"] = rounded_target
-                temp_path = f"{config.ACTIVE_TRADES_FILE}.tmp"
-                with open(temp_path, "w") as f:
-                    json.dump(local_trades, f, indent=4)
-                os.replace(temp_path, config.ACTIVE_TRADES_FILE)
-                print(f"✅ [API modify_target] Immediately updated target to ₹{rounded_target} in active_trades.json")
-                updated_local = True
-        except Exception as e:
-            print(f"❌ [API modify_target] Failed to write to active_trades: {e}")
+    try:
+        def update_target(local_trades):
+            if symbol not in local_trades:
+                return False
+            local_trades[symbol]["target"] = rounded_target
+            return True
+
+        updated_local = bool(merge_trades(update_target, source="positions_api_modify_target"))
+        if updated_local:
+            print(f"✅ [API modify_target] Immediately updated target to ₹{rounded_target} in active_trades.json")
+    except ActiveTradeStoreError as e:
+        print(f"❌ [API modify_target] Failed to write to active_trades: {e}")
             
     # 2. Targets are virtual now. Cancel any stale exchange-side target LIMIT order.
     kite = None
